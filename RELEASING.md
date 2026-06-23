@@ -20,8 +20,8 @@ Pushing the `v*` tag triggers the workflow, which produces:
 | Platform | Artifacts |
 |----------|-----------|
 | Windows  | `MerScribe-<v>-setup.exe` (NSIS installer), `MerScribe-<v>-portable.exe` |
-| macOS    | `MerScribe-<v>-<arch>.dmg`, `MerScribe-<v>-<arch>.zip` |
-| Linux    | `MerScribe-<v>-<arch>.AppImage` |
+| macOS    | `MerScribe-<v>-arm64.dmg` + `.zip` (Apple Silicon), `MerScribe-<v>-x64.dmg` + `.zip` (Intel) |
+| Linux    | `MerScribe-<v>-x86_64.AppImage` |
 
 > A quick **local** Windows build (portable zip, no admin, no signing) is just
 > `pnpm dist` → `dist/MerScribe-win-x64.zip`.
