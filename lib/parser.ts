@@ -282,6 +282,7 @@ function makeNode(id: string, label?: string, shape: NodeShape = 'rectangle'): N
 // ─── Main parser ──────────────────────────────────────────────────────────────
 
 export function parseMermaidFlowchart(syntax: string, skipLayout = false): ParseResult {
+  syntax = syntax.replace(/\r\n?/g, '\n') // normalize CRLF / CR line endings
   const empty: ParseResult = {
     nodes: [], edges: [],
     direction: 'TD', theme: 'default', look: 'classic', curveStyle: 'basis',
@@ -563,6 +564,7 @@ function parseEr(src: string): { nodes: Node<FlowNodeData>[]; edges: Edge<FlowEd
 }
 
 export function parseDocument(md: string): ParseResult {
+  md = md.replace(/\r\n?/g, '\n') // normalize CRLF / CR (Windows-edited .md files)
   const blocks = extractMermaidBlocks(md)
   const flowSrc = blocks.find((b) => /^\s*(flowchart|graph)\b/.test(b))
   const erSrc = blocks.find((b) => /^\s*erDiagram\b/.test(b))

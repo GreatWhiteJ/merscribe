@@ -1,0 +1,4 @@
+# Keep Markdown (incl. the bundled welcome.md and any .md a user opens) as LF,
+# so the packaged app ships consistent line endings across platforms.
+# (The parser also normalizes CRLF at runtime, but this avoids the churn.)
+*.md text eol=lf
