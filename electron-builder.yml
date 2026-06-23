@@ -1,0 +1,44 @@
+# electron-builder config — used by the CI release workflow to build signed,
+# multi-platform installers. (For a quick local Windows build with no admin
+# rights, use `pnpm dist`, which assembles a portable zip via scripts/pack.mjs.)
+appId: com.greatwhitej.merscribe
+productName: MerScribe
+# asar disabled so the bundled http server can read the static out/ files directly.
+asar: false
+files:
+  - electron/**/*
+  - out/**/*
+  - package.json
+directories:
+  output: dist
+  buildResources: build
+publish:
+  provider: github
+  owner: GreatWhiteJ
+  repo: merscribe
+
+win:
+  icon: electron/icon.ico
+  target:
+    - nsis
+    - portable
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  artifactName: MerScribe-${version}-setup.${ext}
+portable:
+  artifactName: MerScribe-${version}-portable.${ext}
+
+mac:
+  category: public.app-category.productivity
+  target:
+    - dmg
+    - zip
+  artifactName: MerScribe-${version}-${arch}.${ext}
+
+linux:
+  category: Graphics
+  target:
+    - AppImage
+  artifactName: MerScribe-${version}-${arch}.${ext}

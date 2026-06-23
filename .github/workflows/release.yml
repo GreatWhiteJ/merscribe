@@ -1,0 +1,56 @@
+name: Release
+
+# Push a version tag (e.g. v0.1.1) to build and publish installers for all
+# platforms to the matching GitHub Release.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write # create/upload release assets via GITHUB_TOKEN
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: latest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build static app
+        run: pnpm build
+
+      - name: Package & publish (electron-builder)
+        run: pnpm exec electron-builder --publish always
+        env:
+          # Upload to the GitHub Release for this tag
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # --- Code signing (optional) ---
+          # Builds are unsigned until these repo secrets are set; see RELEASING.md.
+          # Windows (base64-encoded .pfx + its password):
+          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          # macOS (base64-encoded Developer ID .p12 + its password):
+          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          # macOS notarization (Apple ID + app-specific password + team id):
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}

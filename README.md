@@ -8,11 +8,15 @@ Draw flowcharts, notes, data tables, and ER diagrams on an infinite canvas. The 
 
 ---
 
-## Download (Windows)
+## Download
 
-Grab the latest **`MerScribe-win-x64.zip`** from the [Releases page](https://github.com/GreatWhiteJ/merscribe/releases), extract it anywhere, and run **`MerScribe.exe`** — no install, no admin rights.
+Grab the build for your platform from the [Releases page](https://github.com/GreatWhiteJ/merscribe/releases):
 
-> **First-launch note:** MerScribe isn't code-signed yet, so Windows SmartScreen will show *"Windows protected your PC."* Click **More info → Run anyway** — once. It's the standard prompt for open-source apps from an unverified publisher; it only appears the first time. (A code-signed single-file installer is on the roadmap.)
+- **Windows** — `MerScribe-win-x64.zip` (extract → run `MerScribe.exe`), or, on tagged releases, a `…-setup.exe` installer / `…-portable.exe`.
+- **macOS** — `…-<arch>.dmg` *(built per tagged release via CI)*
+- **Linux** — `…-<arch>.AppImage` *(built per tagged release via CI)*
+
+> **First-launch note (unsigned):** until signing certificates are added, you'll see a one-time OS prompt — Windows SmartScreen → **More info → Run anyway**; macOS Gatekeeper → **right-click → Open**. Standard for open-source apps from an unverified publisher. (Enabling signing: see [RELEASING.md](RELEASING.md).)
 
 On launch the app silently auto-saves your diagram to `Downloads/diagram.md`, restores your last session, and live-syncs the canvas with that file. Use the save-status pill (top toolbar) to open or link a different `.md`.
 
@@ -30,13 +34,17 @@ pnpm desktop   # build + launch the desktop app
 pnpm dev       # browser dev server at http://localhost:3000
 ```
 
-Build the distributable yourself:
+Build a local distributable (Windows portable zip — no admin, no signing):
 
 ```bash
 pnpm dist      # → dist/MerScribe-win-x64.zip  (and dist/MerScribe-win32-x64/MerScribe.exe)
 ```
 
-**Requirements:** Node.js 18+, pnpm. (The `.exe` build runs on Windows; macOS/Linux packages require building on those platforms.)
+**Requirements:** Node.js 18+, pnpm.
+
+### Releasing
+
+Official multi-platform builds (Windows/macOS/Linux installers) are produced automatically when you push a version tag — see [RELEASING.md](RELEASING.md).
 
 ---
 
@@ -111,8 +119,8 @@ The **Markdown file is the canonical artifact**: the canvas serializes to it and
 
 ## Roadmap
 
-- [ ] Code-signed builds (remove the SmartScreen prompt)
-- [ ] macOS / Linux packages
+- [x] Multi-platform CI release builds (Windows / macOS / Linux)
+- [ ] Code-signed builds (signing is wired up — add cert secrets per [RELEASING.md](RELEASING.md))
 - [ ] Sequence, mindmap, class, and state diagram support
 - [ ] Obsidian plugin
 - [ ] Dark mode for the editor UI
