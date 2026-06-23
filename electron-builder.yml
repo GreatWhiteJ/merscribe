@@ -5,10 +5,17 @@ appId: com.greatwhitej.merscribe
 productName: MerScribe
 # asar disabled so the bundled http server can read the static out/ files directly.
 asar: false
+# The app's runtime is just electron/main.cjs serving the static export — no
+# node_modules are needed (the out/ bundle is self-contained).
 files:
   - electron/**/*
-  - out/**/*
   - package.json
+  - '!node_modules/**'
+# out/ is .gitignored, which electron-builder's file globbing skips; copy it as
+# an extra resource instead so it reliably lands at <resources>/out.
+extraResources:
+  - from: out
+    to: out
 directories:
   output: dist
 publish:

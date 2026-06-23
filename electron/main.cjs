@@ -5,7 +5,13 @@ const http = require('http')
 
 app.setName('MerScribe') // stable userData path for the saved session
 
-const OUT = path.join(__dirname, '..', 'out')
+// Locate the static export (out/). Different packagings place it differently:
+//  - electron-builder: copied via extraResources → <resources>/out
+//  - pack.mjs / dev:    alongside the app           → <__dirname>/../out
+const OUT = [
+  path.join(process.resourcesPath || '', 'out'),
+  path.join(__dirname, '..', 'out'),
+].find((p) => fs.existsSync(path.join(p, 'index.html'))) || path.join(__dirname, '..', 'out')
 let savePath = null
 let mainWindow = null
 let fileWatcher = null
