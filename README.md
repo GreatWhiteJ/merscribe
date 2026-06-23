@@ -48,6 +48,10 @@ Official multi-platform builds (Windows/macOS/Linux installers) are produced aut
 
 ---
 
+## For AI agents
+
+MerScribe is built so an AI agent can read and write the diagram directly as Markdown — see **[AGENT_GUIDE.md](AGENT_GUIDE.md)**. Paste that file into your agent's instructions; it explains the `.md` contract (flowcharts, tables, notes, groups, ER) and the one rule that matters: express structure, never positions. The app live-syncs the canvas with the file, so an agent edits `~/Downloads/diagram.md` and you watch it update.
+
 ## Features
 
 The canvas and the `.md` file are two views of the same document — edit either, and the other follows.
