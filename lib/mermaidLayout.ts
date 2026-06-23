@@ -96,24 +96,27 @@ function placeAttachedNotes(
     return { x, y, w: d.w, h: d.h }
   }
   const boxes = positioned.filter((n) => !subgraphIds.has(n.id)).map((n) => ({ id: n.id, box: absOf(n) }))
-  const OVERLAP = 18 // how far the corner of the sticky tucks onto the host
+  const TUCK = 14 // how far the sticky tucks onto the host edge
 
   const placed = attached.map((note) => {
     const host = note.parentId ? byId.get(note.parentId) : undefined
     if (!host) return note
     const hb = absOf(host)
-    // Size the sticky from its content (so the text is readable) but keep it
-    // compact — it only tucks onto the host by a corner.
+    // Size the sticky from its content (readable) but keep it compact.
     const rs = realSize(note)
     const nw = Math.min(rs.w, 230), nh = Math.min(rs.h, 170)
+    // Candidates hang the sticky off the host's bottom / top / left, anchored to
+    // the host's left edge. We deliberately avoid the right edge: a host's
+    // measured WIDTH is content-driven (esp. tables) and unknown here, so a
+    // right-anchored tuck would land inside the host. Bottom/top/left only use
+    // the host's x/y/height, which the layout sizes reliably.
     const cands: Record<string, { x: number; y: number }> = {
-      TR: { x: hb.x + hb.w - OVERLAP, y: hb.y - nh + OVERLAP },
-      TL: { x: hb.x - nw + OVERLAP, y: hb.y - nh + OVERLAP },
-      BR: { x: hb.x + hb.w - OVERLAP, y: hb.y + hb.h - OVERLAP },
-      BL: { x: hb.x - nw + OVERLAP, y: hb.y + hb.h - OVERLAP },
+      below: { x: hb.x, y: hb.y + hb.h - TUCK },
+      above: { x: hb.x, y: hb.y - nh + TUCK },
+      left: { x: hb.x - nw + TUCK, y: hb.y },
     }
-    let best = 'TR', bestScore = Infinity
-    for (const k of ['TR', 'TL', 'BR', 'BL']) {
+    let best = 'below', bestScore = Infinity
+    for (const k of ['below', 'above', 'left']) {
       const c = cands[k]
       const nb = { x: c.x, y: c.y, w: nw, h: nh }
       let score = 0
@@ -127,7 +130,7 @@ function placeAttachedNotes(
     return {
       ...note,
       parentId: host.id,
-      extent: undefined, // allow the sticky to overhang the host corner
+      extent: undefined, // allow the sticky to overhang the host
       position: { x: c.x - hb.x, y: c.y - hb.y },
       width: nw,
       height: nh,
