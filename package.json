@@ -1,6 +1,6 @@
 {
   "name": "merscribe",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": false,
   "description": "MerScribe — a desktop whiteboard for Mermaid diagrams whose source of truth is a clean Markdown file, editable on the canvas or in the .md by an AI agent, kept in lossless two-way sync.",
   "keywords": [
