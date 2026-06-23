@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Desktop app (Electron)** — local window with silent auto-save to a `.md` file (default `Downloads/diagram.md`), last-session restore on launch, and an Open-dialog file picker (no overwrite prompt).
+- **Lossless Markdown round-trip** — the diagram is a single canonical `.md` document (a Mermaid `flowchart` block, optional `erDiagram` block, GFM tables, and `###` note sections). `parseDocument` imports it and `serializeDocument` exports it, so shapes, per-end markers, groups, tables, notes, and entities all survive an edit-and-reload.
+- **Live file-sync (desktop)** — external edits to the linked `.md` (by a person or an AI agent) update the canvas in real time, and canvas edits write straight back. Sync is content-based: no echo-writes, no swallowed edits.
+- **Notes** — free sticky notes, plus *attached* notes that nest onto a host node as a footnote, tucking into the host's most-open corner. Markdown note bodies live in the `.md`.
+- **Data tables** — an editable, spreadsheet-style grid that serializes to a GitHub-flavored Markdown table.
+- **ER entities & relationships** — typed fields with PK/FK/UK keys, per-field connection handles, and crow's-foot cardinality.
+- **Per-end edge markers** — independent arrow / circle / cross / none on each end, plus inline edge-colored labels.
+- **Auto-arrange** — toolbar action and on-structure-change relayout using Mermaid's own engine.
+- **Preview badges** — tables and noted nodes show a 📋 / 📝 badge in the Mermaid Live panel instead of dumping their contents.
+
+### Changed
+- The canvas is no longer one-way: Mermaid is now both generated from **and** parsed back into the canvas, and the `.md` file (not the in-memory state) is the canonical artifact.
+- Auto-layout switched from fixed-size Dagre to Mermaid's **size-aware** layered layout, so large tables/notes get real room and the canvas matches the live preview (crossing-free, upstream→downstream). Dagre remains a fallback.
+
 ## [0.1.0] - 2026-03-08
 
 ### Added

@@ -1,135 +1,73 @@
-# Mermaid Visual Editor
+# MerScribe
 
-A visual drag-and-drop editor for [Mermaid.js](https://mermaid.js.org) flowcharts. Build diagrams visually — export clean `.mmd` syntax.
+A desktop whiteboard for [Mermaid.js](https://mermaid.js.org) diagrams whose **source of truth is a clean Markdown file** — editable by a human on the canvas, or by an AI agent in the `.md`, with the two kept in **lossless two-way sync**.
 
 No account. No cloud. Runs locally.
 
-**[Try the live demo](https://mermaid-visual-editor-delta.vercel.app/)**
-
-<img width="1914" height="904" alt="image" src="https://github.com/user-attachments/assets/8626790d-d5cc-4fe1-8dc1-0f3c78792d0b" />
-
-
-Mermaid Visual Editor lets you draw flowcharts by dragging nodes and connecting edges on an infinite canvas. Mermaid syntax is generated automatically — you never hand-type it. Built with Next.js, React Flow, Zustand, and Mermaid.js.
-
-### Install & Run
-
-**Global install (recommended for repeat use):**
-```bash
-npm install -g mermaid-visual-editor
-mermaid-visual-editor
-```
-
-**One-off (no install):**
-```bash
-npx mermaid-visual-editor
-```
-
-Both commands serve the app and open your browser at [http://localhost:3000](http://localhost:3000).
-
-**Requirements:** Node.js 18+
+Draw flowcharts, notes, data tables, and ER diagrams on an infinite canvas. The diagram is stored as a single Markdown document (Mermaid blocks + GFM tables + note sections). Edit the canvas *or* the file and the other follows — so an agent can sketch or revise a diagram in plain text and you watch it update live, and vice-versa.
 
 ---
 
-### Development Setup
+## Download (Windows)
+
+Grab the latest **`MerScribe-win-x64.zip`** from the [Releases page](https://github.com/GreatWhiteJ/merscribe/releases), extract it anywhere, and run **`MerScribe.exe`** — no install, no admin rights.
+
+> **First-launch note:** MerScribe isn't code-signed yet, so Windows SmartScreen will show *"Windows protected your PC."* Click **More info → Run anyway** — once. It's the standard prompt for open-source apps from an unverified publisher; it only appears the first time. (A code-signed single-file installer is on the roadmap.)
+
+On launch the app silently auto-saves your diagram to `Downloads/diagram.md`, restores your last session, and live-syncs the canvas with that file. Use the save-status pill (top toolbar) to open or link a different `.md`.
+
+---
+
+## Run from source
 
 ```bash
-git clone https://github.com/saketkattu/mermaid-visual-editor.git
-cd mermaid-visual-editor
+git clone https://github.com/GreatWhiteJ/merscribe.git
+cd merscribe
 pnpm install
-pnpm dev
+
+pnpm desktop   # build + launch the desktop app
+# or:
+pnpm dev       # browser dev server at http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Build the distributable yourself:
 
-**Requirements:** Node.js 18+, pnpm
+```bash
+pnpm dist      # → dist/MerScribe-win-x64.zip  (and dist/MerScribe-win32-x64/MerScribe.exe)
+```
 
----
-
-## Why I Built This & Validation
-
-### The Problem
-
-Writing Mermaid syntax by hand works fine for small diagrams. As diagrams grow, it becomes cognitively taxing — syntax errors, layout frustration, editing fatigue. Users shift from *designing systems* to *debugging text*.
-
-The core tension: **human visual thinking vs. text-based diagram construction.**
-
-### Who Feels This Pain
-
-**PKMS Power Users** — rely on plain-text workflows inside tools like Obsidian to maintain portable, future-proof knowledge systems. They tolerate syntax complexity until diagrams exceed a manageable threshold, at which point editing becomes disproportionately effortful.
-
-**Technical Writers & Educators** — use Mermaid to communicate processes and flows in documentation. Syntax introduces friction that competes with their primary job: explaining ideas.
-
-**System Architects & Developers** — value diagrams as structured, version-controlled artifacts. They experience diminishing returns when diagrams become visually complex but syntactically dense.
-
-### Jobs-to-be-Done
-
-- **When modeling complex systems**, I want to express relationships visually without fighting syntax, **so I can focus on thinking rather than formatting.**
-- **When refining diagrams**, I want changes to feel lightweight and intuitive, **so I can iterate rapidly without cognitive fatigue.**
-- **When storing diagrams in my knowledge workflows**, I want them to remain portable and future-proof, **so I avoid lock-in.**
-
-### The Friction Matrix
-
-| Current Approach | Strength | Breaking Point |
-|-----------------|----------|----------------|
-| **Manual syntax** | Maximum portability and precision | Syntax fatigue, high error frequency, cognitive overload as diagrams scale |
-| **Mermaid Live Editor** | Official, free, syntax-complete | Context switching, no bi-directional workflow with local files |
-| **Excalidraw / Whiteboards** | Highly intuitive visual manipulation | Loss of diagram-as-code benefits, weak portability |
-| **AI-assisted generation** | Fast initial creation | Syntax errors, hallucinations, manual cleanup burden |
-
-### Market Signals
-
-Mermaid.js has substantial ecosystem penetration:
-
-- **86,300+ GitHub Stars**
-- **~2.8M Weekly NPM Downloads**
-- **~350,000+ Mermaid-related Plugin Downloads** (Obsidian ecosystem)
-- Estimated friction-affected users: **~2.5M–3M users**
-
-**What users say:**
-
-> *"Creating and editing diagrams visually is much more intuitive."*
->
-> *"Syntax gets cumbersome real fast for larger mind maps."*
->
-> *"Mermaid chooses poor layouts… lines are inconsistent."*
->
-> *"Been waiting for something like this since forever."*
+**Requirements:** Node.js 18+, pnpm. (The `.exe` build runs on Windows; macOS/Linux packages require building on those platforms.)
 
 ---
 
-## Solution + Features
+## Features
 
-Mermaid Visual Editor takes a **visual-first** approach: draw first, export syntax. The canvas state is the source of truth — Mermaid syntax is always derived, never hand-typed.
+The canvas and the `.md` file are two views of the same document — edit either, and the other follows.
 
-### Drawing
-- **Add nodes** — click `+ Add Node`, press `N`, or double-click the canvas
-- **Connect nodes** — drag from the handle at the top/bottom/left/right of any node to another node
-- **14 node shapes** — Rectangle, Rounded, Stadium, Diamond, Circle, Hexagon, Cylinder, and more
-- **Rename** — double-click any node or edge label to edit inline
+### Diagram objects
+- **Flow nodes** — 14 shapes (rectangle, rounded, stadium, diamond, circle, hexagon, cylinder, …); double-click to rename inline.
+- **Edges** — drag from any node's top/bottom/left/right handle. Solid/dashed/thick lines, per-end markers (arrow, circle, cross, none) on *each* side, and inline edge labels.
+- **Groups (subgraphs)** — drop a node onto a group to nest it; drag it out to un-nest.
+- **Notes (sticky)** — free notes are their own object; drop a note onto a node and it *attaches* as a footnote that tucks onto the host's most-open corner. Full Markdown note content lives in the `.md`.
+- **Data tables** — an editable, spreadsheet-style grid that serializes to a GitHub-flavored Markdown table.
+- **ER entities & relationships** — typed fields with PK/FK/UK keys, per-field connection handles, and crow's-foot cardinality.
 
-### Editing
-- **Shape picker** — select a node, then click a shape to change it
-- **Style picker** — customize node fill color, border color, and text color
-- **Edge customization** — change line style (solid, dashed, thick) and arrow type
-- **Delete** — select nodes/edges and press `Backspace` or `Delete`
-- **Duplicate** — duplicate selected nodes and their edges by pressing `Ctrl+D`
-- **Auto Layout** — arrange nodes top-to-bottom powered by Dagre
-- **Undo/Redo** — full history stack (`Ctrl+Z` / `Ctrl+Shift+Z`)
+### Markdown round-trip & live sync
+- **Canonical `.md`** — the document is a single Markdown file: a Mermaid `flowchart` block, an optional `erDiagram` block, GFM tables, and `###` note sections. Layout positions are kept separately, so the source stays clean.
+- **Lossless import & export** — export to `.md`, edit it by hand or with an AI agent, reopen, and your changes are incorporated; shapes, markers, groups, tables, notes, and entities all round-trip.
+- **Live file-sync (desktop)** — change the `.md` on disk and the canvas updates in real time; edit the canvas and it auto-saves back. Sync is content-based, so there are no echo-writes and no swallowed edits.
 
-### Diagram Settings
-- **Direction** — switch layout direction (Top-to-Bottom, Left-to-Right, Bottom-to-Top, Right-to-Left)
-- **Theme** — choose Mermaid theme (default, dark, forest, neutral, base)
-- **Hand-drawn** — toggle Mermaid's `look: handDrawn` style
-- **Curve Style** — choose from 12 routing algorithms
+### Layout
+- **Mermaid-quality auto-layout** — the canvas uses Mermaid's own layered engine, made *size-aware* so large tables and notes get real room. Clean, crossing-free, upstream→downstream flow that matches the preview.
+- **Auto-arrange** — one toolbar click re-tidies the canvas; it also runs automatically when the structure changes.
+- **Direction / theme / curve** — TD / LR / BT / RL, 5 Mermaid themes, hand-drawn look, 12 edge-routing curves.
 
-### Export & Save
-- **Copy Syntax** — copies valid Mermaid `graph` syntax to clipboard
-- **Download .mmd** — downloads the diagram as a `.mmd` file
-- **Download .svg** — downloads the live rendered diagram as an `.svg` file
-- **Save / Load** — save and reload the canvas as a `.json` file
+### Editing & history
+- Shape & style pickers (fill / stroke / text color), inline label and table-cell editing, duplicate (`Ctrl+D`), delete, marquee multi-select, and full undo/redo (`Ctrl+Z` / `Ctrl+Shift+Z`).
 
-### Preview
-- **Show Preview** — live Mermaid.js render in a floating panel
+### Preview & export
+- **Mermaid Live panel** — renders the flowchart and ER diagram; tables and noted nodes show a 📋 / 📝 badge instead of dumping their contents.
+- Copy Mermaid syntax, download `.md` / `.svg`.
 
 ### Keyboard Shortcuts
 
@@ -144,95 +82,46 @@ Mermaid Visual Editor takes a **visual-first** approach: draw first, export synt
 
 ---
 
-## Roadmap
+## How it works
 
-### Near-term
-- [ ] Import Mermaid syntax to canvas
-- [ ] Subgraph support
-- [ ] Sequence diagram support
-- [ ] Mindmap support
+```
+  Canvas (React Flow)  ⇄  Zustand store { nodes[], edges[] }
+                            ⇅  serialize / parse
+                                 lib/serializer.ts · lib/parser.ts
+              Canonical Markdown (.md)
+                            ⇅  live file-watch + silent auto-save (Electron)
+                          file on disk  ⇄  human / AI agent edits
+```
 
-### Medium-term
-- [ ] Obsidian plugin
-- [ ] Class diagram support
-- [ ] ER diagram support
-- [ ] State diagram support
-- [ ] Dark mode for the editor UI
-
-### Long-term
-- [ ] Real-time collaboration
-- [ ] AI-assisted diagram generation
-- [ ] VS Code extension
-- [ ] Two-way code-canvas sync
-
----
-
-## Tech Stack & Architecture
+The **Markdown file is the canonical artifact**: the canvas serializes to it and parses back from it losslessly, so either side can be the editor. Layout positions live in a separate session file, keeping the `.md` clean. In the desktop app the file is watched, so external edits flow onto the canvas and canvas edits flow back — content-based diffing prevents echo loops.
 
 | Layer | Choice |
 |-------|--------|
-| Framework | Next.js (App Router) |
+| Framework | Next.js (App Router, static export) |
+| Desktop shell | Electron |
 | Visual Canvas | React Flow (XY Flow) |
-| Mermaid Render | mermaid.js |
+| Mermaid Render & Layout | mermaid.js |
 | State | Zustand |
 | Styling | Tailwind CSS |
 | Language | TypeScript |
-| Layout | Dagre |
-| Package Manager | pnpm |
-
-### Architecture
-
-```
-User drags nodes/edges
-       |
-  Zustand Store { nodes[], edges[] }
-       |
-  Mermaid Serializer (lib/serializer.ts)
-       |
-  Mermaid syntax string
-       |
-  Preview panel + Export (.mmd / clipboard / .svg)
-```
-
-The canvas state is canonical. Mermaid syntax is always derived — never parsed back in.
+| Fallback Layout | Dagre |
+| Packaging | electron-builder |
 
 ---
 
-## Contributing
+## Roadmap
 
-PRs welcome. Open an issue first for large changes. See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
-
-```bash
-pnpm dev     # development server
-pnpm build   # production build → generates out/
-pnpm lint    # lint
-pnpm audit   # security audit
-```
-
-### CI
-
-Every push and PR against `master` runs lint, audit, and build automatically via GitHub Actions.
-
-### Releases
-
-Releases are fully automated — do not manually edit the version in `package.json`.
-
-1. Update `CHANGELOG.md` — move items from `[Unreleased]` to a new versioned section
-2. Go to **Actions → Release → Run workflow**
-3. Choose the bump type (`patch` / `minor` / `major`)
-
-The workflow bumps `package.json`, commits, tags, publishes to npm, and creates a GitHub Release.
-
-> **Required secret:** add `NPM_TOKEN` to repo Settings → Secrets → Actions before triggering a release.
+- [ ] Code-signed builds (remove the SmartScreen prompt)
+- [ ] macOS / Linux packages
+- [ ] Sequence, mindmap, class, and state diagram support
+- [ ] Obsidian plugin
+- [ ] Dark mode for the editor UI
+- [ ] AI-assisted diagram generation
 
 ---
 
-## Security
+## Credits & License
 
-See [SECURITY.md](SECURITY.md) for the vulnerability disclosure policy.
+MerScribe is a fork of [**saketkattu/mermaid-visual-editor**](https://github.com/saketkattu/mermaid-visual-editor) (MIT) — a visual-first Mermaid flowchart editor. It re-centers that project around a Markdown-canonical, agent-editable desktop workflow: a true desktop app, lossless `.md` round-trip, live file-sync, and richer objects (notes, tables, ER entities).
 
----
-
-## License
-
-MIT
+Licensed under the [MIT License](LICENSE). The original copyright notice is retained per the MIT terms.

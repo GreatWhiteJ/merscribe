@@ -1,13 +1,13 @@
 'use client'
 
-'use client'
-
 import { useState, useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFlowStore } from '@/lib/store'
+import { autoArrange } from '@/lib/mermaidLayout'
 import { ShapePickerPopover } from '@/components/ShapePickerPopover'
 import { SettingsPopover } from '@/components/SettingsPopover'
 import { ImportModal } from '@/components/ImportModal'
+import { AutoSave } from '@/components/AutoSave'
 
 interface TopToolbarProps {
   inspectorOpen: boolean
@@ -24,12 +24,16 @@ function NeuIconBtn({
   active,
   title,
   children,
+  draggable,
+  onDragStart,
 }: {
   onClick?: () => void
   disabled?: boolean
   active?: boolean
   title?: string
   children: React.ReactNode
+  draggable?: boolean
+  onDragStart?: (e: React.DragEvent) => void
 }) {
   return (
     <button
@@ -37,6 +41,8 @@ function NeuIconBtn({
       disabled={disabled}
       title={title}
       aria-label={title}
+      draggable={draggable}
+      onDragStart={onDragStart}
       style={{
         background: NEU_BG,
         border: 'none',
@@ -110,14 +116,29 @@ export function TopToolbar({ inspectorOpen, onToggleInspector, onOpenPalette, sy
   const [importOpen, setImportOpen] = useState(false)
   const [copied, setCopied] = useState(false)
 
-  const { setDrawingShape, addSubgraph } = useFlowStore(
+  const { setDrawingShape, addSubgraph, addNote, addTable, setNodes } = useFlowStore(
     useShallow((s) => ({
       setDrawingShape: s.setDrawingShape,
       addSubgraph: s.addSubgraph,
+      addNote: s.addNote,
+      addTable: s.addTable,
+      setNodes: s.setNodes,
     }))
   )
 
   const drawingShape = useFlowStore((s) => s.drawingShape)
+  const [arranging, setArranging] = useState(false)
+
+  const handleArrange = async () => {
+    const { nodes, edges, direction, theme, look, curveStyle } = useFlowStore.getState()
+    if (nodes.length === 0) return
+    setArranging(true)
+    try {
+      setNodes(await autoArrange(nodes, edges, { direction, theme, look, curveStyle }))
+    } finally {
+      setArranging(false)
+    }
+  }
   const shapePickerRef = useRef<HTMLDivElement>(null)
   const settingsRef = useRef<HTMLDivElement>(null)
 
@@ -129,6 +150,11 @@ export function TopToolbar({ inspectorOpen, onToggleInspector, onOpenPalette, sy
 
   const handlePointer = () => {
     setDrawingShape(null)
+  }
+
+  const startDrag = (kind: string) => (e: React.DragEvent) => {
+    e.dataTransfer.setData('application/mfe-object', JSON.stringify({ kind }))
+    e.dataTransfer.effectAllowed = 'copy'
   }
 
   return (
@@ -165,11 +191,42 @@ export function TopToolbar({ inspectorOpen, onToggleInspector, onOpenPalette, sy
         </div>
 
         {/* Add Group — next to shape picker */}
-        <NeuIconBtn onClick={() => addSubgraph()} title="Add a group/subgraph container">
+        <NeuIconBtn onClick={() => addSubgraph()} draggable onDragStart={startDrag('group')} title="Add a group/subgraph container (click, or drag onto canvas)">
           ⬡
         </NeuIconBtn>
 
+        {/* Add Note — multi-line text annotation */}
+        <NeuIconBtn onClick={() => addNote()} draggable onDragStart={startDrag('note')} title="Add a note (click, or drag onto canvas)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+            <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z" />
+            <line x1="9" y1="13" x2="15" y2="13" />
+            <line x1="9" y1="17" x2="13" y2="17" />
+          </svg>
+        </NeuIconBtn>
+
+        {/* Add data table — exports to a Markdown table */}
+        <NeuIconBtn onClick={() => addTable()} draggable onDragStart={startDrag('table')} title="Add a data table (click, or drag onto canvas)">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <line x1="3" y1="9" x2="21" y2="9" />
+            <line x1="3" y1="15" x2="21" y2="15" />
+            <line x1="9" y1="3" x2="9" y2="21" />
+            <line x1="15" y1="3" x2="15" y2="21" />
+          </svg>
+        </NeuIconBtn>
+
         <Divider />
+
+        {/* Auto-arrange — snap canvas to Mermaid's clean layered layout */}
+        <NeuIconBtn onClick={handleArrange} active={arranging} title="Auto-arrange (tidy to Mermaid layout)">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <rect x="9" y="2" width="6" height="5" rx="1" />
+            <rect x="2" y="15" width="6" height="5" rx="1" />
+            <rect x="16" y="15" width="6" height="5" rx="1" />
+            <path d="M12 7v4M12 11H5v4M12 11h7v4" />
+          </svg>
+        </NeuIconBtn>
 
         {/* Import Mermaid */}
         <NeuIconBtn onClick={() => setImportOpen(true)} title="Import Mermaid syntax">
@@ -204,6 +261,11 @@ export function TopToolbar({ inspectorOpen, onToggleInspector, onOpenPalette, sy
           </NeuIconBtn>
           {settingsOpen && <SettingsPopover onClose={() => setSettingsOpen(false)} />}
         </div>
+
+        <Divider />
+
+        {/* Auto-save the .md document to a file */}
+        <AutoSave syntax={syntax} />
       </div>
 
       {/* Draw mode hint */}

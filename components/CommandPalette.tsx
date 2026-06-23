@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFlowStore } from '@/lib/store'
-import { applyDagreLayout } from '@/lib/layout'
+import { autoArrange } from '@/lib/mermaidLayout'
 import { serialize } from '@/lib/serializer'
 import { ALL_SHAPES, ShapeIcon } from '@/components/ShapeIcons'
 import { ImportModal } from '@/components/ImportModal'
@@ -49,10 +49,10 @@ export function CommandPalette({ onClose }: CommandPaletteProps) {
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
 
-  const handleAutoLayout = () => {
-    const { nodes, edges, direction } = useFlowStore.getState()
+  const handleAutoLayout = async () => {
+    const { nodes, edges, direction, theme, look, curveStyle } = useFlowStore.getState()
     if (nodes.length === 0) return
-    setNodes(applyDagreLayout(nodes, edges, direction))
+    setNodes(await autoArrange(nodes, edges, { direction, theme, look, curveStyle }))
     onClose()
   }
 

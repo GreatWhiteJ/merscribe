@@ -8,14 +8,14 @@ import { ZoomControls } from '@/components/ZoomControls'
 import { InspectorPanel } from '@/components/Inspector/InspectorPanel'
 import { CommandPalette } from '@/components/CommandPalette'
 import { useFlowStore } from '@/lib/store'
-import { serialize } from '@/lib/serializer'
+import { serializeDocument } from '@/lib/serializer'
 
 function EditorContent() {
   const [inspectorOpen, setInspectorOpen] = useState(true)
   const [paletteOpen, setPaletteOpen] = useState(false)
 
   const { nodes, edges, direction, theme, look, curveStyle } = useFlowStore()
-  const syntax = serialize(nodes, edges, { direction, theme, look, curveStyle })
+  const syntax = serializeDocument(nodes, edges, { direction, theme, look, curveStyle })
 
   return (
     <div

@@ -4,18 +4,101 @@ import {
   ReactFlow,
   Background,
   BackgroundVariant,
+  ConnectionMode,
   useReactFlow,
   type Node,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from 'react'
+import { useCallback, useEffect, useRef, useState, type MouseEvent, type DragEvent } from 'react'
 
 import { useFlowStore, type FlowNodeData } from '@/lib/store'
 import { FlowNode } from './NodeTypes/FlowNode'
 import { FlowEdge } from './EdgeTypes/FlowEdge'
+import { EdgeMarkerDefs } from './EdgeTypes/EdgeMarkers'
 
 const nodeTypes = { flowNode: FlowNode }
 const edgeTypes = { flowEdge: FlowEdge }
+
+// ── Group geometry helpers ────────────────────────────────────────────────────
+// Use the live rendered size (`measured`) so membership tracks a resized group,
+// falling back to the explicit style size, then a sensible default.
+function dimsOf(n: Node<FlowNodeData>, defW: number, defH: number) {
+  const w = n.measured?.width ?? (typeof n.style?.width === 'number' ? n.style.width : defW)
+  const h = n.measured?.height ?? (typeof n.style?.height === 'number' ? n.style.height : defH)
+  return { w, h }
+}
+
+// Absolute center of a node, resolving a parent-relative position if needed.
+function absCenter(n: Node<FlowNodeData>, all: Node<FlowNodeData>[]) {
+  const { w, h } = dimsOf(n, 150, 60)
+  let x = n.position.x
+  let y = n.position.y
+  if (n.parentId) {
+    const p = all.find((m) => m.id === n.parentId)
+    if (p) {
+      x += p.position.x
+      y += p.position.y
+    }
+  }
+  return { cx: x + w / 2, cy: y + h / 2 }
+}
+
+// The group whose bounds contain (cx, cy). Smallest matching group wins so
+// behavior stays predictable when groups overlap.
+function groupAt(
+  all: Node<FlowNodeData>[],
+  cx: number,
+  cy: number,
+  excludeId: string,
+): string | null {
+  let best: { id: string; area: number } | null = null
+  for (const sg of all) {
+    if (!sg.data.isSubgraph || sg.id === excludeId) continue
+    const { w, h } = dimsOf(sg, 320, 220)
+    if (cx >= sg.position.x && cx <= sg.position.x + w && cy >= sg.position.y && cy <= sg.position.y + h) {
+      const area = w * h
+      if (!best || area < best.area) best = { id: sg.id, area }
+    }
+  }
+  return best?.id ?? null
+}
+
+// Absolute bounds of a node, resolving a parent-relative position.
+function absBounds(n: Node<FlowNodeData>, all: Node<FlowNodeData>[]) {
+  const { w, h } = dimsOf(n, 150, 60)
+  let x = n.position.x
+  let y = n.position.y
+  if (n.parentId) {
+    const p = all.find((m) => m.id === n.parentId)
+    if (p) {
+      x += p.position.x
+      y += p.position.y
+    }
+  }
+  return { x, y, w, h }
+}
+
+// The non-note, non-subgraph node a sticky note overlaps the most — even just
+// touching an edge counts. The node with the largest overlap wins.
+function nodeOverlapping(
+  all: Node<FlowNodeData>[],
+  note: Node<FlowNodeData>,
+  excludeId: string,
+): string | null {
+  const a = absBounds(note, all)
+  let best: { id: string; area: number } | null = null
+  for (const n of all) {
+    if (n.id === excludeId || n.data.isNote || n.data.isSubgraph) continue
+    const b = absBounds(n, all)
+    const ix = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
+    const iy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+    if (ix > 0 && iy > 0) {
+      const area = ix * iy
+      if (!best || area > best.area) best = { id: n.id, area }
+    }
+  }
+  return best?.id ?? null
+}
 
 interface CanvasInnerProps {
   onOpenPalette?: () => void
@@ -26,9 +109,11 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
     nodes, edges,
     onNodesChange, onEdgesChange, onConnect,
     addNode, addNodeAtPosition,
+    addNote, addTable, addSubgraph, addEntity,
     undo, redo, duplicateSelected, copySelected, pasteClipboard,
     pushHistory, assignToSubgraph,
     drawingShape, setDrawingShape,
+    setDropTargetId, setSpawnCenter,
   } = useFlowStore()
   const { screenToFlowPosition } = useReactFlow()
 
@@ -169,65 +254,117 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
     [dragStart, drawingShape, screenToFlowPosition, addNodeAtPosition, setDrawingShape],
   )
 
-  // ── Push history after drag ends; auto-assign/unassign group membership ─────
+  // ── Drag-and-drop new objects from the toolbar onto the canvas ──────────────
+  const handleDragOver = useCallback((e: DragEvent) => {
+    if (e.dataTransfer.types.includes('application/mfe-object')) {
+      e.preventDefault()
+      e.dataTransfer.dropEffect = 'copy'
+    }
+  }, [])
+
+  const handleDrop = useCallback(
+    (e: DragEvent) => {
+      const raw = e.dataTransfer.getData('application/mfe-object')
+      if (!raw) return
+      e.preventDefault()
+      let data: { kind: string; shape?: string }
+      try { data = JSON.parse(raw) } catch { return }
+      const pos = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+      switch (data.kind) {
+        case 'note': addNote(undefined, pos); break
+        case 'table': addTable(undefined, pos); break
+        case 'group': addSubgraph(undefined, pos); break
+        case 'entity': addEntity(undefined, pos); break
+        case 'shape':
+          addNodeAtPosition({ x: pos.x - 60, y: pos.y - 25 }, (data.shape ?? 'rectangle') as FlowNodeData['shape'])
+          break
+      }
+    },
+    [screenToFlowPosition, addNote, addTable, addSubgraph, addEntity, addNodeAtPosition],
+  )
+
+  // ── Keep spawn point at the visible canvas center ───────────────────────────
+  const updateSpawnCenter = useCallback(() => {
+    const rect = wrapperRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const c = screenToFlowPosition({ x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 })
+    setSpawnCenter({ x: c.x, y: c.y })
+  }, [screenToFlowPosition, setSpawnCenter])
+
+  useEffect(() => {
+    // Run after the initial fitView settles.
+    const t = setTimeout(updateSpawnCenter, 300)
+    return () => clearTimeout(t)
+  }, [updateSpawnCenter])
+
+  // ── Live drag: highlight the group the node would drop into ─────────────────
+  const handleNodeDrag = useCallback(
+    (_event: MouseEvent, draggedNode: Node<FlowNodeData>) => {
+      const state = useFlowStore.getState()
+      if (draggedNode.data.isSubgraph) {
+        if (state.dropTargetId !== null) setDropTargetId(null)
+        return
+      }
+      const all = state.nodes
+      const { cx, cy } = absCenter(draggedNode, all)
+      const cur = draggedNode.parentId ?? null
+      let next: string | null = null
+      if (draggedNode.data.isNote) {
+        // A note prefers attaching to a node it overlaps; else joining a group.
+        const host = nodeOverlapping(all, draggedNode, draggedNode.id)
+        const target = host ?? groupAt(all, cx, cy, draggedNode.id)
+        next = target && target !== cur ? target : null
+      } else {
+        const target = groupAt(all, cx, cy, draggedNode.id)
+        next = target && target !== cur ? target : null
+      }
+      if (state.dropTargetId !== next) setDropTargetId(next)
+    },
+    [setDropTargetId]
+  )
+
+  // ── Drag end: push history and reconcile group membership ───────────────────
   const handleNodeDragStop = useCallback(
     (_event: MouseEvent, draggedNode: Node<FlowNodeData>) => {
       pushHistory()
-      const allNodes = useFlowStore.getState().nodes
+      setDropTargetId(null)
+      const all = useFlowStore.getState().nodes
 
-      // Group dragged onto free nodes — auto-assign nodes now inside it
+      // Dragging a group itself — capture any free node/note now inside it.
       if (draggedNode.data.isSubgraph) {
-        const sgW = typeof draggedNode.style?.width === 'number' ? draggedNode.style.width : 320
-        const sgH = typeof draggedNode.style?.height === 'number' ? draggedNode.style.height : 220
-        const freeNodes = allNodes.filter((n) => !n.data.isSubgraph && !n.parentId)
-        const toAssign = freeNodes.filter((n) => {
-          const nw = n.measured?.width ?? 150
-          const nh = n.measured?.height ?? 60
-          const cx = n.position.x + nw / 2
-          const cy = n.position.y + nh / 2
-          return (
-            cx >= draggedNode.position.x && cx <= draggedNode.position.x + sgW &&
-            cy >= draggedNode.position.y && cy <= draggedNode.position.y + sgH
-          )
+        const { w: sgW, h: sgH } = dimsOf(draggedNode, 320, 220)
+        const x0 = draggedNode.position.x
+        const y0 = draggedNode.position.y
+        const toAssign = all.filter((n) => {
+          if (n.data.isSubgraph || n.parentId) return false
+          const { cx, cy } = absCenter(n, all)
+          return cx >= x0 && cx <= x0 + sgW && cy >= y0 && cy <= y0 + sgH
         })
         if (toAssign.length > 0) assignToSubgraph(toAssign.map((n) => n.id), draggedNode.id)
         return
       }
 
-      const w = draggedNode.measured?.width ?? 150
-      const h = draggedNode.measured?.height ?? 60
+      const { cx, cy } = absCenter(draggedNode, all)
 
-      // Node already in a group — check if it was dragged outside
-      if (draggedNode.parentId) {
-        const parent = allNodes.find((n) => n.id === draggedNode.parentId)
-        if (parent) {
-          const sgW = typeof parent.style?.width === 'number' ? parent.style.width : 320
-          const sgH = typeof parent.style?.height === 'number' ? parent.style.height : 220
-          const cx = draggedNode.position.x + w / 2
-          const cy = draggedNode.position.y + h / 2
-          if (cx < 0 || cx > sgW || cy < 0 || cy > sgH) {
-            assignToSubgraph([draggedNode.id], null)
-          }
-        }
-        return
-      }
-
-      // Free node — check if dropped inside a group
-      const subgraphs = allNodes.filter((n) => n.data.isSubgraph)
-      if (subgraphs.length === 0) return
-      const cx = draggedNode.position.x + w / 2
-      const cy = draggedNode.position.y + h / 2
-      for (const sg of subgraphs) {
-        const sgW = typeof sg.style?.width === 'number' ? sg.style.width : 320
-        const sgH = typeof sg.style?.height === 'number' ? sg.style.height : 220
-        if (cx >= sg.position.x && cx <= sg.position.x + sgW &&
-            cy >= sg.position.y && cy <= sg.position.y + sgH) {
-          assignToSubgraph([draggedNode.id], sg.id)
+      // A sticky note dropped over a node attaches to it (becomes its child and
+      // moves with it). Dropped elsewhere, it falls through to group handling.
+      if (draggedNode.data.isNote) {
+        const host = nodeOverlapping(all, draggedNode, draggedNode.id)
+        if (host) {
+          if (host !== (draggedNode.parentId ?? null)) assignToSubgraph([draggedNode.id], host)
           return
         }
       }
+
+      // Any node or note: figure out which group (if any) now contains it and
+      // reconcile in one step. Handles free→group, group→free, and group→group.
+      const target = groupAt(all, cx, cy, draggedNode.id)
+      const current = draggedNode.parentId ?? null
+      if (target !== current) {
+        assignToSubgraph([draggedNode.id], target)
+      }
     },
-    [pushHistory, assignToSubgraph]
+    [pushHistory, assignToSubgraph, setDropTargetId]
   )
 
   const previewRect =
@@ -260,6 +397,8 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
     >
       <ReactFlow
         nodes={nodes}
@@ -269,7 +408,11 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        connectionMode={ConnectionMode.Loose}
+        zoomOnDoubleClick={false}
+        onNodeDrag={handleNodeDrag}
         onNodeDragStop={handleNodeDragStop}
+        onMoveEnd={updateSpawnCenter}
         fitView
         deleteKeyCode={['Backspace', 'Delete']}
         panOnDrag={drawingShape ? false : [1, 2]}
@@ -280,6 +423,8 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={2} color="#d1d9e6" />
       </ReactFlow>
+
+      <EdgeMarkerDefs />
 
       {relativePreview && relativePreview.width > 4 && relativePreview.height > 4 && (
         <div

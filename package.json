@@ -1,43 +1,38 @@
 {
-  "name": "mermaid-visual-editor",
+  "name": "merscribe",
   "version": "0.1.0",
   "private": false,
-  "description": "Visual drag-and-drop editor for Mermaid.js diagrams. Build flowcharts visually — export clean .mmd syntax.",
+  "description": "MerScribe — a desktop whiteboard for Mermaid diagrams whose source of truth is a clean Markdown file, editable on the canvas or in the .md by an AI agent, kept in lossless two-way sync.",
   "keywords": [
     "mermaid",
     "diagram",
-    "flowchart",
-    "visual-editor",
-    "drag-and-drop",
-    "mermaid.js",
+    "whiteboard",
+    "markdown",
+    "desktop",
+    "electron",
+    "ai-agent",
     "react-flow"
   ],
   "license": "MIT",
-  "author": "Saket Kattuboina",
-  "homepage": "https://mermaid-visual-editor-delta.vercel.app/",
+  "author": "GreatWhiteJ",
+  "main": "electron/main.cjs",
+  "homepage": "https://github.com/GreatWhiteJ/merscribe",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/saketkattu/mermaid-visual-editor.git"
+    "url": "git+https://github.com/GreatWhiteJ/merscribe.git"
   },
   "bugs": {
-    "url": "https://github.com/saketkattu/mermaid-visual-editor/issues"
+    "url": "https://github.com/GreatWhiteJ/merscribe/issues"
   },
   "engines": {
     "node": ">=18"
   },
-  "bin": {
-    "mermaid-visual-editor": "bin/cli.js"
-  },
-  "files": [
-    "out/",
-    "bin/",
-    "README.md",
-    "LICENSE"
-  ],
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "node bin/cli.js",
+    "electron": "electron electron/main.cjs",
+    "desktop": "next build && electron electron/main.cjs",
+    "dist": "next build && node scripts/pack.mjs",
     "lint": "eslint"
   },
   "dependencies": {
@@ -47,15 +42,16 @@
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
-    "serve": "^14.2.6",
     "zustand": "^5.0.11"
   },
   "devDependencies": {
+    "@electron/packager": "^20.0.1",
     "@tailwindcss/postcss": "^4",
     "@types/dagre": "^0.7.53",
     "@types/node": "^20",
     "@types/react": "^19",
     "@types/react-dom": "^19",
+    "electron": "^30.5.1",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
     "tailwindcss": "^4",

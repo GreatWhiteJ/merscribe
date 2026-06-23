@@ -2,11 +2,54 @@
 
 import { useEffect, useRef, useState } from 'react'
 import mermaid from 'mermaid'
+import { extractMermaidBlocks } from '@/lib/serializer'
+import { parseDocument } from '@/lib/parser'
 
 let initialized = false
 let renderId = 0
 
 const NEU_BG = 'var(--neu-bg)'
+
+// Tables and attached notes are NOT dumped into the preview as raw grids/text —
+// they belong to a node. Instead we tag the relevant rendered flowchart node
+// with a small corner icon: 📋 for a table, 📝 for a node that has a note.
+function decorateNodes(container: HTMLElement, syntax: string) {
+  let tableIds: Set<string>
+  let noteHostIds: Set<string>
+  try {
+    const doc = parseDocument(syntax)
+    const subgraphIds = new Set(doc.nodes.filter((n) => n.data.isSubgraph).map((n) => n.id))
+    tableIds = new Set(doc.nodes.filter((n) => n.data.isTable).map((n) => n.id))
+    noteHostIds = new Set(
+      doc.nodes
+        .filter((n) => n.data.isNote && n.parentId && !subgraphIds.has(n.parentId))
+        .map((n) => n.parentId as string)
+    )
+  } catch {
+    return
+  }
+  if (!tableIds.size && !noteHostIds.size) return
+  const ns = 'http://www.w3.org/2000/svg'
+  container.querySelectorAll<SVGGElement>('g.node').forEach((g) => {
+    // Mermaid ids its flowchart node groups as `flowchart-<nodeId>-<counter>`.
+    const nid = /^flowchart-(.+)-\d+$/.exec(g.id)?.[1]
+    if (!nid) return
+    const icons: string[] = []
+    if (tableIds.has(nid)) icons.push('📋')
+    if (noteHostIds.has(nid)) icons.push('📝')
+    if (!icons.length) return
+    let bbox: DOMRect
+    try { bbox = g.getBBox() } catch { return }
+    const t = document.createElementNS(ns, 'text')
+    t.setAttribute('x', String(bbox.x + bbox.width - 3))
+    t.setAttribute('y', String(bbox.y + 13))
+    t.setAttribute('text-anchor', 'end')
+    t.setAttribute('font-size', '13')
+    t.setAttribute('pointer-events', 'none')
+    t.textContent = icons.join(' ')
+    g.appendChild(t)
+  })
+}
 
 interface MermaidLiveSectionProps {
   syntax: string
@@ -18,16 +61,23 @@ function DiagramView({ syntax, containerRef }: { syntax: string; containerRef: R
   useEffect(() => {
     if (!containerRef.current) return
     const render = async () => {
-      const id = `mermaid-insp-${++renderId}`
+      // A document can contain several Mermaid blocks (e.g. a flowchart and an
+      // erDiagram). Render each independently and stack them.
+      const blocks = extractMermaidBlocks(syntax)
+      const batch = ++renderId
       try {
-        const { svg } = await mermaid.render(id, syntax)
-        if (containerRef.current) {
-          containerRef.current.innerHTML = svg
+        let html = ''
+        for (let i = 0; i < blocks.length; i++) {
+          const { svg } = await mermaid.render(`mermaid-insp-${batch}-${i}`, blocks[i])
+          html += `<div style="margin-bottom:14px">${svg}</div>`
+        }
+        if (batch === renderId && containerRef.current) {
+          containerRef.current.innerHTML = html || '<div style="font-size:11px;color:#9ca3af">Nothing to preview yet</div>'
+          decorateNodes(containerRef.current, syntax)
           setError(null)
         }
       } catch (err) {
-        document.getElementById(id)?.remove()
-        setError(err instanceof Error ? err.message : 'Render error')
+        if (batch === renderId) setError(err instanceof Error ? err.message : 'Render error')
       }
     }
     render()

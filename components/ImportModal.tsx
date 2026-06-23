@@ -1,8 +1,9 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { parseMermaidFlowchart } from '@/lib/parser'
+import { parseDocument } from '@/lib/parser'
 import type { ParseResult } from '@/lib/parser'
+import { autoArrange } from '@/lib/mermaidLayout'
 import { useFlowStore } from '@/lib/store'
 
 interface ImportModalProps {
@@ -29,7 +30,7 @@ export function ImportModal({ onClose }: ImportModalProps) {
       return
     }
     debounceRef.current = setTimeout(() => {
-      setResult(parseMermaidFlowchart(value))
+      setResult(parseDocument(value))
     }, 300)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [value])
@@ -41,10 +42,11 @@ export function ImportModal({ onClose }: ImportModalProps) {
     return () => window.removeEventListener('keydown', handler)
   }, [onClose])
 
-  const handleImport = useCallback(() => {
+  const handleImport = useCallback(async () => {
     if (!result || result.error) return
     const { nodes, edges, direction, theme, look, curveStyle } = result
-    importDiagram(nodes, edges, { direction, theme, look, curveStyle })
+    const laidOut = await autoArrange(nodes, edges, { direction, theme, look, curveStyle })
+    importDiagram(laidOut, edges, { direction, theme, look, curveStyle })
     onClose()
   }, [result, importDiagram, onClose])
 
@@ -78,8 +80,8 @@ export function ImportModal({ onClose }: ImportModalProps) {
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-4 border-b border-gray-100">
           <div>
-            <h2 id="import-modal-title" className="text-sm font-semibold text-gray-900">Import Mermaid Syntax</h2>
-            <p id="import-modal-desc" className="text-xs text-gray-400 mt-0.5">Paste a flowchart definition to load it onto the canvas</p>
+            <h2 id="import-modal-title" className="text-sm font-semibold text-gray-900">Import .md / Mermaid</h2>
+            <p id="import-modal-desc" className="text-xs text-gray-400 mt-0.5">Paste an exported document (flowchart, ER, tables, notes) to rebuild it</p>
           </div>
           <button
             onClick={onClose}

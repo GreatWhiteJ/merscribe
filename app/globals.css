@@ -30,3 +30,15 @@ body {
 .neu-inset  { box-shadow: var(--neu-shadow-inset); }
 .neu-concave{ box-shadow: var(--neu-shadow-concave); }
 .neu-soft   { box-shadow: var(--neu-shadow-soft); }
+
+/* Connection handles: hidden by default, revealed on node hover / when selected
+   / while a connection is being dragged. Keeps the canvas clean. */
+.react-flow__handle {
+  opacity: 0;
+  transition: opacity 0.12s ease;
+}
+.react-flow__node:hover .react-flow__handle,
+.react-flow__node.selected .react-flow__handle,
+.react-flow.connecting .react-flow__handle {
+  opacity: 1;
+}
