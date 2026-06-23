@@ -37,20 +37,34 @@ jobs:
       - name: Build static app
         run: pnpm build
 
+      # Export signing vars ONLY when the secrets exist. Passing an empty
+      # CSC_LINK makes electron-builder treat "" as a cert file path and fail
+      # (notably on macOS); omitting it entirely yields a clean unsigned build.
+      - name: Configure code signing (if secrets present)
+        shell: bash
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          S_WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+          S_WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+          S_APPLE_ID: ${{ secrets.APPLE_ID }}
+          S_APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          S_APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$MAC_CSC_LINK" ]; then
+            { echo "CSC_LINK=$MAC_CSC_LINK"; echo "CSC_KEY_PASSWORD=$MAC_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          fi
+          if [ -n "$S_WIN_CSC_LINK" ]; then
+            { echo "WIN_CSC_LINK=$S_WIN_CSC_LINK"; echo "WIN_CSC_KEY_PASSWORD=$S_WIN_CSC_KEY_PASSWORD"; } >> "$GITHUB_ENV"
+          fi
+          if [ -n "$S_APPLE_ID" ]; then
+            { echo "APPLE_ID=$S_APPLE_ID"; echo "APPLE_APP_SPECIFIC_PASSWORD=$S_APPLE_APP_SPECIFIC_PASSWORD"; echo "APPLE_TEAM_ID=$S_APPLE_TEAM_ID"; } >> "$GITHUB_ENV"
+          fi
+
       - name: Package & publish (electron-builder)
         run: pnpm exec electron-builder --publish always
         env:
-          # Upload to the GitHub Release for this tag
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # --- Code signing (optional) ---
-          # Builds are unsigned until these repo secrets are set; see RELEASING.md.
-          # Windows (base64-encoded .pfx + its password):
-          WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
-          WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
-          # macOS (base64-encoded Developer ID .p12 + its password):
-          CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
-          # macOS notarization (Apple ID + app-specific password + team id):
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Don't auto-search the keychain for a signing identity; signing only
+          # happens when CSC_LINK was exported above (i.e. a cert secret was set).
+          CSC_IDENTITY_AUTO_DISCOVERY: false
