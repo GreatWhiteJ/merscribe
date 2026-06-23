@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Per-end edge markers** — independent arrow / circle / cross / none on each end, plus inline edge-colored labels.
 - **Auto-arrange** — toolbar action and on-structure-change relayout using Mermaid's own engine.
 - **Preview badges** — tables and noted nodes show a 📋 / 📝 badge in the Mermaid Live panel instead of dumping their contents.
+- **First-run example** — a friendly "Bridge of Death" welcome diagram (a group, a table, and free + attached notes) is seeded on first launch so new users start with something to explore instead of a blank canvas.
 
 ### Changed
 - The canvas is no longer one-way: Mermaid is now both generated from **and** parsed back into the canvas, and the `.md` file (not the in-memory state) is the canonical artifact.

@@ -92,6 +92,13 @@ async function createWindow() {
   const port = await startServer()
   const sess = readSession()
   savePath = (sess && sess.savePath) || path.join(app.getPath('downloads'), 'diagram.md')
+  // First run (no linked file and no prior session): seed a friendly example
+  // diagram so new users land on something to play with, not a blank canvas.
+  if (!fs.existsSync(savePath) && !(sess && sess.state)) {
+    try {
+      fs.writeFileSync(savePath, fs.readFileSync(path.join(__dirname, 'welcome.md'), 'utf8'), 'utf8')
+    } catch { /* ignore — fall back to a blank canvas */ }
+  }
   const win = new BrowserWindow({
     width: 1440,
     height: 920,
