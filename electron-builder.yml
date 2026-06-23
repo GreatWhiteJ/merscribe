@@ -27,22 +27,18 @@ win:
   icon: electron/icon.ico
   target:
     - nsis
-    - portable
 nsis:
   oneClick: false
   perMachine: false
   allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
   artifactName: MerScribe-${version}-setup.${ext}
-portable:
-  artifactName: MerScribe-${version}-portable.${ext}
 
 mac:
   category: public.app-category.productivity
   icon: electron/icon.png
   target:
     - target: dmg
-      arch: [arm64, x64]
-    - target: zip
       arch: [arm64, x64]
   artifactName: MerScribe-${version}-${arch}.${ext}
 

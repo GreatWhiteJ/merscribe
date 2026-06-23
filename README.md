@@ -12,9 +12,9 @@ Draw flowcharts, notes, data tables, and ER diagrams on an infinite canvas. The 
 
 Grab the build for your platform from the [Releases page](https://github.com/GreatWhiteJ/merscribe/releases):
 
-- **Windows** — `MerScribe-<v>-setup.exe` (installer) or `MerScribe-<v>-portable.exe` (run directly)
-- **macOS** — `MerScribe-<v>-arm64.dmg` (Apple Silicon) or `MerScribe-<v>-x64.dmg` (Intel)
-- **Linux** — `MerScribe-<v>-x86_64.AppImage`
+- **Windows** — `MerScribe-<v>-setup.exe` → **double-click to run the installer** (don't extract it). Installs the app, adds a Start Menu + desktop shortcut, and registers in Add/Remove Programs for clean uninstall.
+- **macOS** — `MerScribe-<v>-arm64.dmg` (Apple Silicon) or `MerScribe-<v>-x64.dmg` (Intel) — open the `.dmg` and drag MerScribe to Applications.
+- **Linux** — `MerScribe-<v>-x86_64.AppImage` — mark executable and run.
 
 > **First-launch note (unsigned):** until signing certificates are added, you'll see a one-time OS prompt — Windows SmartScreen → **More info → Run anyway**; macOS Gatekeeper → **right-click → Open**. Standard for open-source apps from an unverified publisher. (Enabling signing: see [RELEASING.md](RELEASING.md).)
 

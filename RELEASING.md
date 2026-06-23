@@ -17,14 +17,15 @@ git push origin master --follow-tags
 
 Pushing the `v*` tag triggers the workflow, which produces:
 
-| Platform | Artifacts |
-|----------|-----------|
-| Windows  | `MerScribe-<v>-setup.exe` (NSIS installer), `MerScribe-<v>-portable.exe` |
-| macOS    | `MerScribe-<v>-arm64.dmg` + `.zip` (Apple Silicon), `MerScribe-<v>-x64.dmg` + `.zip` (Intel) |
+| Platform | Artifact |
+|----------|----------|
+| Windows  | `MerScribe-<v>-setup.exe` (NSIS installer) |
+| macOS    | `MerScribe-<v>-arm64.dmg` (Apple Silicon), `MerScribe-<v>-x64.dmg` (Intel) |
 | Linux    | `MerScribe-<v>-x86_64.AppImage` |
 
-> A quick **local** Windows build (portable zip, no admin, no signing) is just
-> `pnpm dist` → `dist/MerScribe-win-x64.zip`.
+> For quick **local** smoke-testing (no admin, no signing) there's still
+> `pnpm dist` → an unpacked app + zip under `dist/`. That's a dev convenience,
+> not a distributed artifact — releases ship the installer above.
 
 ## Code signing
 

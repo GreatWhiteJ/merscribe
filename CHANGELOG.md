@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - The canvas is no longer one-way: Mermaid is now both generated from **and** parsed back into the canvas, and the `.md` file (not the in-memory state) is the canonical artifact.
 - Auto-layout switched from fixed-size Dagre to Mermaid's **size-aware** layered layout, so large tables/notes get real room and the canvas matches the live preview (crossing-free, upstream→downstream). Dagre remains a fallback.
+- Windows distribution is a single **NSIS installer** (`setup.exe`) — dropped the portable `.exe`; macOS ships per-architecture `.dmg`s (Apple Silicon + Intel).
+
+### Fixed
+- Packaged desktop app launched to a **blank window** — the static UI bundle (`out/`) is `.gitignored` and electron-builder's file globbing skipped it, so nothing was bundled. Now copied via `extraResources` and resolved resiliently in `main.cjs`. Verified the shipped installer renders on Windows/macOS/Linux.
 
 ## [0.1.0] - 2026-03-08
 
