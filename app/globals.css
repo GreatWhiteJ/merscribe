@@ -42,3 +42,9 @@ body {
 .react-flow.connecting .react-flow__handle {
   opacity: 1;
 }
+
+/* Group nodes set their interior to pointer-events:none so drags pan the canvas;
+   keep the resize handles clickable regardless. */
+.react-flow__resize-control {
+  pointer-events: all;
+}

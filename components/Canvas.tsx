@@ -460,12 +460,18 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
   const erIds = erNodeIds(nodes)
   const hasEr = entityIds.size > 0
   const hasFlow = nodes.some((n) => !erIds.has(n.id))
-  const viewNodes =
+  const viewBase =
     activeBlock === 'all'
       ? nodes
       : activeBlock === 'er'
         ? nodes.filter((n) => erIds.has(n.id))
         : nodes.filter((n) => !erIds.has(n.id))
+  // Make group wrappers click-through so a drag over their empty interior pans /
+  // selects the canvas (incl. right-drag). Interactive bits (title bar, handles,
+  // resizer) re-enable pointer events themselves; child nodes are separate wrappers.
+  const viewNodes = viewBase.map((n) =>
+    n.data?.isSubgraph ? { ...n, style: { ...n.style, pointerEvents: 'none' as const } } : n,
+  )
   const viewEdges =
     activeBlock === 'all'
       ? edges

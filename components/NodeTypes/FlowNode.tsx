@@ -791,7 +791,7 @@ export function FlowNode({ id, data, selected }: NodeProps) {
   if (nodeData.isSubgraph) {
     return (
       <div
-        className="relative w-full h-full rounded-xl cursor-pointer"
+        className="relative w-full h-full rounded-xl"
         style={{
           border: isDropTarget ? '2px solid #4F46E5' : `2px dashed ${strokeColor}`,
           backgroundColor: isDropTarget
@@ -800,11 +800,19 @@ export function FlowNode({ id, data, selected }: NodeProps) {
               ? nodeData.fillColor
               : 'rgba(59,130,246,0.04)',
           transition: 'background-color 0.12s, border-color 0.12s',
+          // The empty interior is click-through, so dragging in it pans/selects
+          // the canvas (incl. right-drag) just like the open canvas. Interactive
+          // bits below opt back in via pointer-events.
+          pointerEvents: 'none',
         }}
-        onDoubleClick={handleDoubleClick}
       >
         <NodeResizer minWidth={200} minHeight={120} isVisible={!!selected} />
-        <div className={`absolute top-2 left-3 text-xs font-semibold text-gray-500 ${editing ? '' : 'select-none pointer-events-none'}`}>
+        {/* Title bar — select, drag, and rename the group here */}
+        <div
+          className={`absolute top-0 left-0 right-0 flex items-center px-3 text-xs font-semibold text-gray-500 ${editing ? '' : 'select-none'}`}
+          style={{ height: 26, pointerEvents: 'all', cursor: 'move' }}
+          onDoubleClick={handleDoubleClick}
+        >
           <NodeLabel {...labelProps} color={textColor} />
         </div>
         <NodeHandles />

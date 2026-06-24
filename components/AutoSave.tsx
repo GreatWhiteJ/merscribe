@@ -118,6 +118,7 @@ const baseName = (p: string) => p.split(/[\\/]/).pop() || p
 export function AutoSave({ syntax }: { syntax: string }) {
   const [name, setName] = useState<string | null>(null)
   const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [dirty, setDirty] = useState(false) // canvas has unsaved changes vs disk
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleRef = useRef<any>(null) // FileSystemFileHandle (browser mode)
   const linkedRef = useRef(false)
@@ -139,8 +140,13 @@ export function AutoSave({ syntax }: { syntax: string }) {
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [])
 
-  const write = async () => {
+  // Write the current canvas to the linked file. Auto-save calls this with
+  // force=false; an explicit Save (Ctrl+S / Save As) passes force=true.
+  // Safety net: auto-save NEVER writes an empty canvas over the file — a botched
+  // load could otherwise wipe your document. Emptying a file needs an explicit Save.
+  const write = async (force = false) => {
     try {
+      if (!force && useFlowStore.getState().nodes.length === 0) return
       setStatus('saving')
       const md = currentSyntax()
       const d = getDesktop()
@@ -148,12 +154,13 @@ export function AutoSave({ syntax }: { syntax: string }) {
         await d.save(md, snapshot())
       } else {
         const h = handleRef.current
-        if (!h) return
+        if (!h) { setStatus('idle'); return }
         const w = await h.createWritable()
         await w.write(md)
         await w.close()
       }
       diskRef.current = md // disk now holds exactly this
+      setDirty(false)
       setStatus('saved')
     } catch {
       setStatus('error')
@@ -209,7 +216,8 @@ export function AutoSave({ syntax }: { syntax: string }) {
       const path = await d.getSavePath()
       setName(baseName(path))
       linkedRef.current = true
-      write()
+      // Do NOT write here — restoring/opening must never overwrite the file.
+      // Auto-save kicks in only once the canvas actually changes.
     })()
     return () => {
       cancelled = true
@@ -249,12 +257,14 @@ export function AutoSave({ syntax }: { syntax: string }) {
   // (write() sets the "saving" status when it runs.)
   useEffect(() => {
     if (!linkedRef.current) return
-    if (syntax === diskRef.current) return // already saved / just loaded — nothing new
+    if (syntax === diskRef.current) { setDirty(false); return } // saved / just loaded
+    setDirty(true)
     if (timer.current) clearTimeout(timer.current)
-    timer.current = setTimeout(write, 600)
+    timer.current = setTimeout(() => write(false), 600)
     return () => {
       if (timer.current) clearTimeout(timer.current)
     }
+
   }, [syntax])
 
   // Parse a .md and lay it out onto the canvas (used by Open).
@@ -276,10 +286,12 @@ export function AutoSave({ syntax }: { syntax: string }) {
     if (d) {
       const res = await d.openFile()
       if (!res) return // cancelled
+      await loadOntoCanvas(res.content ?? '') // replace canvas (blank if file empty)
       setName(baseName(res.path))
       linkedRef.current = true
-      if (res.content && res.content.trim()) await loadOntoCanvas(res.content)
-      write()
+      diskRef.current = currentSyntax() // canvas now matches the file — never write on open
+      setDirty(false)
+      setStatus('saved')
       return
     }
     if (!fsaSupported) return
@@ -291,11 +303,13 @@ export function AutoSave({ syntax }: { syntax: string }) {
       })
       const file = await h.getFile()
       const text = await file.text()
+      await loadOntoCanvas(text ?? '')
       handleRef.current = h
       setName(h.name)
       linkedRef.current = true
-      if (text && text.trim()) await loadOntoCanvas(text)
-      await write()
+      diskRef.current = currentSyntax()
+      setDirty(false)
+      setStatus('saved')
     } catch {
       /* user cancelled */
     }
@@ -310,7 +324,7 @@ export function AutoSave({ syntax }: { syntax: string }) {
       if (!path) return // cancelled
       setName(baseName(path))
       linkedRef.current = true
-      write()
+      await write(true) // explicit save to the chosen file
       return
     }
     if (!fsaSupported) return
@@ -324,11 +338,37 @@ export function AutoSave({ syntax }: { syntax: string }) {
       handleRef.current = h
       setName(h.name)
       linkedRef.current = true
-      await write()
+      await write(true)
     } catch {
       /* user cancelled */
     }
   }
+
+  // Explicit Save (Ctrl/Cmd+S). Forces a write even of an empty canvas; if no
+  // file is linked yet, falls back to Save As.
+  const saveNow = async () => {
+    const d = getDesktop()
+    if (d) {
+      if (!name) { await saveAs(); return }
+      await write(true)
+      return
+    }
+    if (!handleRef.current) { await saveAs(); return }
+    await write(true)
+  }
+
+  // Standard keyboard shortcuts: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return
+      const k = e.key.toLowerCase()
+      if (k === 's') { e.preventDefault(); if (e.shiftKey) saveAs(); else saveNow() }
+      else if (k === 'o' && !e.shiftKey) { e.preventDefault(); openExisting() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name])
 
   if (!fsaSupported && !desktop) {
     return (
@@ -338,13 +378,12 @@ export function AutoSave({ syntax }: { syntax: string }) {
     )
   }
 
-  const dotColor = !name
-    ? '#4F46E5'
-    : status === 'saving'
-      ? '#f59e0b'
-      : status === 'error'
-        ? '#ef4444'
-        : '#10b981'
+  const dotColor =
+    status === 'error' ? '#ef4444'
+      : status === 'saving' ? '#f59e0b'
+        : !name ? '#4F46E5'
+          : dirty ? '#f59e0b' // unsaved changes
+            : '#10b981' // saved / clean
   const label = !name ? 'Auto-save' : status === 'saving' ? 'Saving…' : status === 'error' ? 'Save failed' : name
 
   return (
@@ -352,7 +391,7 @@ export function AutoSave({ syntax }: { syntax: string }) {
       {/* Open an existing .md file */}
       <button
         onClick={openExisting}
-        title="Open a .md file"
+        title="Open a .md file (Ctrl+O)"
         aria-label="Open a .md file"
         style={{
           background: NEU_BG,
@@ -378,8 +417,8 @@ export function AutoSave({ syntax }: { syntax: string }) {
       {/* Save-status pill — shows the current auto-save file; click to Save As */}
       <button
         onClick={saveAs}
-        title={name ? `Auto-saving to ${name} — click to Save As (new name or location)` : 'Save As — choose a file to auto-save your .md to'}
-        aria-label={name ? `Auto-saving to ${name}. Save As` : 'Save As'}
+        title={name ? `${dirty ? 'Unsaved changes' : 'Saved'} — ${name}\nCtrl+S to save now · click for Save As (Ctrl+Shift+S)` : 'Save As — choose a file for your .md'}
+        aria-label={name ? `${dirty ? 'Unsaved changes' : 'Saved'}, ${name}. Save As` : 'Save As'}
         style={{
           display: 'flex',
           alignItems: 'center',

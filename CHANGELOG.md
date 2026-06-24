@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-06-24
+
+### Added
+- **Standard file model** — explicit **Open** (Ctrl+O), **Save** (Ctrl+S), and **Save As** (Ctrl+Shift+S, or click the filename pill), with an unsaved-changes indicator on the pill. Auto-save remains for live `.md` sync but is now safe.
+
+### Fixed
+- **Files could be wiped on launch/open.** The old model rewrote the file immediately after loading and auto-saved aggressively, so a slow/failed load (or stale session state) could overwrite the document with an empty diagram. Opening now **never writes**, and auto-save **never writes an empty canvas over a non-empty file**.
+- **Right-drag (and drag) inside a group** now pans/selects the canvas — a group's empty interior is click-through; the group has a title bar to select/move/rename it, and resize handles still work.
+
 ## [0.1.8] - 2026-06-24
 
 ### Added
