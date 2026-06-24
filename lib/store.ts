@@ -77,6 +77,9 @@ export interface FlowNodeData extends Record<string, unknown> {
   rows?: string[][];
   // Visual text size (px) for the object's labels/cells. Canvas-only.
   fontSize?: number;
+  // Transient: an attached note placed by auto-layout that the canvas should
+  // re-position against measured sizes (kitty-corner) once, then clear.
+  autoPlaced?: boolean;
 }
 
 export interface FlowEdgeData extends Record<string, unknown> {
@@ -88,6 +91,11 @@ export interface FlowEdgeData extends Record<string, unknown> {
   // ER edge per-end crow's-foot cardinality (when both endpoints are entities).
   erStart?: ErEnd;
   erEnd?: ErEnd;
+  // ER edge field-level link: which row the relationship ties together — the FK
+  // field on the "many" side and the PK field on the "one" side. Inferred at
+  // parse time (ephemeral; not serialized — recomputed on each load).
+  sourceFieldIndex?: number;
+  targetFieldIndex?: number;
 }
 
 // ─── History snapshot ─────────────────────────────────────────────────────────
@@ -214,6 +222,11 @@ interface FlowState {
   drawingShape: NodeShape | null;
   setDrawingShape: (shape: NodeShape | null) => void;
 
+  // Which Mermaid block is shown when a document holds more than one. 'all' shows
+  // everything; 'flow'/'er' restrict the canvas to the flowchart / ER block.
+  activeBlock: "all" | "flow" | "er";
+  setActiveBlock: (b: "all" | "flow" | "er") => void;
+
   // Group drag-and-drop highlight (transient, not persisted/serialized)
   dropTargetId: string | null;
   setDropTargetId: (id: string | null) => void;
@@ -263,6 +276,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
     clipboard: null,
     drawingShape: null,
     setDrawingShape: (shape) => set({ drawingShape: shape }),
+
+    activeBlock: "all",
+    setActiveBlock: (b) => set({ activeBlock: b }),
 
     dropTargetId: null,
     setDropTargetId: (id) => set({ dropTargetId: id }),

@@ -268,6 +268,30 @@ function extractJson(s: string, fromIndex: number): string {
   return ''
 }
 
+// Read the first `%%{ init: {...} }%%` directive found anywhere in the text.
+// Lets diagram settings (theme/look/curve) round-trip even for documents with no
+// flowchart block to carry them (e.g. a pure erDiagram), where the directive
+// rides at the top of the ER block.
+function readInitConfig(text: string): { theme?: Theme; look?: Look; curveStyle?: CurveStyle } {
+  const initIdx = text.indexOf('init:')
+  if (initIdx < 0) return {}
+  const jsonStart = text.indexOf('{', initIdx + 5)
+  if (jsonStart < 0) return {}
+  const jsonStr = extractJson(text, jsonStart)
+  if (!jsonStr) return {}
+  try {
+    const cfg = JSON.parse(jsonStr) as Record<string, unknown>
+    const fc = cfg.flowchart as Record<string, unknown> | undefined
+    return {
+      theme: typeof cfg.theme === 'string' ? (cfg.theme as Theme) : undefined,
+      look: typeof cfg.look === 'string' ? (cfg.look as Look) : undefined,
+      curveStyle: typeof fc?.curve === 'string' ? (fc.curve as CurveStyle) : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
 // ─── Default node factory ─────────────────────────────────────────────────────
 
 function makeNode(id: string, label?: string, shape: NodeShape = 'rectangle'): Node<FlowNodeData> {
@@ -519,12 +543,67 @@ function parseEr(src: string): { nodes: Node<FlowNodeData>[]; edges: Edge<FlowEd
   const nodes: Node<FlowNodeData>[] = []
   const edges: Edge<FlowEdgeData>[] = []
   let cur: Node<FlowNodeData> | null = null
+  let curName = ''
   let edgeIdx = 0
+  let currentSub: string | null = null // open ER subgraph (group), if any
+  // Per-entity field metadata (incl. comments) used to infer field-level links.
+  const fieldMeta = new Map<string, { name: string; key: string; comment: string }[]>()
+  // ER entities/groups support the same styling as flowcharts: `style`, plus
+  // `classDef`/`class`. Collect them and apply once all nodes exist.
+  type StyleObj = Partial<Pick<FlowNodeData, 'fillColor' | 'strokeColor' | 'textColor'>>
+  const pendingStyles = new Map<string, StyleObj>()
+  const classDefs = new Map<string, StyleObj>()
+  const nodeClasses = new Map<string, string[]>()
+  const parseStyle = (s: string): StyleObj => {
+    const out: StyleObj = {}
+    for (const part of s.split(',')) {
+      const sep = part.indexOf(':')
+      if (sep < 0) continue
+      const k = part.slice(0, sep).trim()
+      const v = part.slice(sep + 1).trim()
+      if (k === 'fill') out.fillColor = v
+      else if (k === 'stroke') out.strokeColor = v
+      else if (k === 'color') out.textColor = v
+    }
+    return out
+  }
+  const addClass = (name: string, cls: string) => nodeClasses.set(name, [...(nodeClasses.get(name) ?? []), cls])
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '').replace(/s$/, '')
+  // Tokens an FK comment points at, e.g. "-> users" / "link to geo_divisions/..".
+  const refToks = (c: string) => {
+    const out: string[] = []
+    const re = /(?:->|link to)\s+([A-Za-z0-9_/]+)/gi
+    let m: RegExpExecArray | null
+    while ((m = re.exec(c))) for (const t of m[1].split('/')) out.push(norm(t))
+    return out
+  }
+  const findPk = (ent: string) => (fieldMeta.get(ent) ?? []).findIndex((f) => f.key === 'PK')
+  // Find the field on `holder` that references `other`: by the relationship label
+  // naming a field, then by an FK comment pointing at `other`, then by name.
+  const findFk = (holder: string, other: string, label: string) => {
+    const fields = fieldMeta.get(holder) ?? []
+    const o = norm(other)
+    const ln = (label || '').toLowerCase()
+    if (ln) for (let i = 0; i < fields.length; i++) if (fields[i].name && ln.includes(fields[i].name.toLowerCase())) return i
+    for (let i = 0; i < fields.length; i++) {
+      const toks = refToks(fields[i].comment)
+      if (toks.some((t) => t === o || t.startsWith(o) || o.startsWith(t))) return i
+    }
+    for (let i = 0; i < fields.length; i++) {
+      const fn = norm(fields[i].name)
+      if (fn === o + 'id' || fn === o) return i
+    }
+    for (let i = 0; i < fields.length; i++) if (fields[i].key === 'FK') return i
+    return -1
+  }
   const ensure = (name: string) => {
     let n = nodes.find((x) => x.id === name)
     if (!n) {
       n = { id: name, type: 'flowNode', position: { x: 0, y: 0 }, data: { label: name, shape: 'rectangle', isEntity: true, fields: [] } }
+      if (currentSub) n.parentId = currentSub // entity declared inside a group
       nodes.push(n)
+    } else if (currentSub && !n.parentId) {
+      n.parentId = currentSub
     }
     return n
   }
@@ -532,11 +611,46 @@ function parseEr(src: string): { nodes: Node<FlowNodeData>[]; edges: Edge<FlowEd
     const line = raw.trim()
     if (!line || /^erDiagram/.test(line)) continue
     if (line === '}') { cur = null; continue }
-    const open = line.match(/^(\w+)\s*\{$/)
-    if (open) { cur = ensure(open[1]); continue }
+
+    // ── Group (subgraph) — same grouping flowcharts have
+    if (line.startsWith('subgraph ')) {
+      const m = line.match(/^subgraph\s+(\w+)(?:\s+\["?([^"\]]*)"?\])?/)
+      if (m) {
+        currentSub = m[1]
+        if (!nodes.some((n) => n.id === currentSub)) {
+          nodes.push({ id: currentSub, type: 'flowNode', position: { x: 0, y: 0 }, data: { label: m[2] ?? m[1], shape: 'rectangle', isSubgraph: true }, zIndex: -1 })
+        }
+      }
+      continue
+    }
+    if (line === 'end') { currentSub = null; continue }
+
+    // ── Styling: `style <name> ...`, `classDef <name> ...`, `class A,B <cls>`
+    if (line.startsWith('style ')) {
+      const m = line.match(/^style\s+(\w+)\s+(.+)$/)
+      if (m) pendingStyles.set(m[1], parseStyle(m[2]))
+      continue
+    }
+    if (line.startsWith('classDef ')) {
+      const m = line.match(/^classDef\s+(\w+)\s+(.+)$/)
+      if (m) classDefs.set(m[1], parseStyle(m[2]))
+      continue
+    }
+    if (line.startsWith('class ')) {
+      const m = line.match(/^class\s+([\w,\s]+?)\s+(\w+)\s*$/)
+      if (m) for (const nm of m[1].split(',').map((s) => s.trim()).filter(Boolean)) addClass(nm, m[2])
+      continue
+    }
+
+    // ── Entity block open (optionally with an inline `:::class`)
+    const open = line.match(/^(\w+)(?::::(\w+))?\s*\{$/)
+    if (open) { curName = open[1]; cur = ensure(curName); if (open[2]) addClass(curName, open[2]); if (!fieldMeta.has(curName)) fieldMeta.set(curName, []); continue }
     if (cur) {
-      const f = line.match(/^(\S+)\s+(\S+)(?:\s+(PK|FK|UK))?/)
-      if (f) (cur.data.fields as EntityField[]).push({ type: f[1], name: f[2], key: (f[3] as EntityKey) || '' })
+      const f = line.match(/^(\S+)\s+(\S+)(?:\s+(PK|FK|UK))?(?:\s+"([^"]*)")?/)
+      if (f) {
+        ;(cur.data.fields as EntityField[]).push({ type: f[1], name: f[2], key: (f[3] as EntityKey) || '' })
+        fieldMeta.get(curName)!.push({ name: f[2], key: f[3] || '', comment: f[4] || '' })
+      }
       continue
     }
     const rel = line.match(/^(\w+)\s+(\S+)\s+(\w+)\s*:\s*"?(.*?)"?\s*$/)
@@ -547,18 +661,40 @@ function parseEr(src: string): { nodes: Node<FlowNodeData>[]; edges: Edge<FlowEd
       if (li < 0) continue
       const leftSym = conn.slice(0, li)
       const rightSym = conn.slice(li + 2)
+      // The FK lives on the "many" side (crow's foot); the PK on the "one" side.
+      const manyLeft = /[}{]/.test(leftSym)
+      const manyRight = /[}{]/.test(rightSym)
+      let sFI: number, tFI: number
+      if (manyRight && !manyLeft) { tFI = findFk(b, a, label); sFI = findPk(a) }
+      else if (manyLeft && !manyRight) { sFI = findFk(a, b, label); tFI = findPk(b) }
+      else {
+        const fkB = findFk(b, a, label)
+        if (fkB >= 0) { tFI = fkB; sFI = findPk(a) }
+        else { const fkA = findFk(a, b, label); if (fkA >= 0) { sFI = fkA; tFI = findPk(b) } else { sFI = findPk(a); tFI = findPk(b) } }
+      }
       edges.push({
         id: `er_${edgeIdx++}`, source: a, target: b, type: 'flowEdge', label,
         data: {
           edgeStyle: conn.includes('..') ? 'dashed' : 'solid',
           erStart: ER_LEFT_REV[leftSym] ?? 'one',
           erEnd: ER_RIGHT_REV[rightSym] ?? 'zero-many',
+          ...(sFI >= 0 ? { sourceFieldIndex: sFI } : {}),
+          ...(tFI >= 0 ? { targetFieldIndex: tFI } : {}),
         },
       })
       continue
     }
-    const bare = line.match(/^(\w+)$/)
-    if (bare) ensure(bare[1])
+    const bare = line.match(/^(\w+)(?::::(\w+))?$/)
+    if (bare) { ensure(bare[1]); if (bare[2]) addClass(bare[1], bare[2]) }
+  }
+
+  // Apply styles: class styles first (in order), then an explicit `style` wins.
+  for (const n of nodes) {
+    if (!n.data.isEntity && !n.data.isSubgraph) continue
+    const applied: StyleObj = {}
+    for (const cls of nodeClasses.get(n.id) ?? []) Object.assign(applied, classDefs.get(cls) ?? {})
+    Object.assign(applied, pendingStyles.get(n.id) ?? {})
+    if (Object.keys(applied).length) n.data = { ...n.data, ...applied }
   }
   return { nodes, edges }
 }
@@ -602,6 +738,15 @@ export function parseDocument(md: string): ParseResult {
 
   const er = erSrc ? parseEr(erSrc) : { nodes: [], edges: [] }
   const edges = [...flow.edges, ...er.edges]
+
+  // For documents with no flowchart block (e.g. pure ER), recover diagram
+  // settings from a global init directive (carried atop the ER block).
+  if (!flowSrc) {
+    const g = readInitConfig(md)
+    if (g.theme) flow.theme = g.theme
+    if (g.look) flow.look = g.look
+    if (g.curveStyle) flow.curveStyle = g.curveStyle
+  }
 
   // Lay out the structural nodes (Dagre), then pin attached notes onto hosts.
   let laid = applyDagreLayout([...nodes, ...er.nodes], edges, flow.direction)

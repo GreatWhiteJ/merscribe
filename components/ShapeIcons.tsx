@@ -69,13 +69,13 @@ export const THEMES: { value: Theme; label: string }[] = [
 ]
 
 export const CURVE_STYLES: { value: CurveStyle; label: string }[] = [
-  { value: 'basis',      label: 'Basis' },
-  { value: 'linear',     label: 'Linear' },
+  { value: 'basis',      label: 'Curved (basis)' },
+  { value: 'linear',     label: 'Straight (linear)' },
+  { value: 'step',       label: 'Right-angle (step)' },
   { value: 'cardinal',   label: 'Cardinal' },
   { value: 'catmullRom', label: 'Catmull-Rom' },
-  { value: 'step',       label: 'Step' },
-  { value: 'stepAfter',  label: 'Step After' },
-  { value: 'stepBefore', label: 'Step Before' },
+  { value: 'stepAfter',  label: 'Right-angle after' },
+  { value: 'stepBefore', label: 'Right-angle before' },
   { value: 'natural',    label: 'Natural' },
   { value: 'monotoneX',  label: 'Monotone X' },
   { value: 'monotoneY',  label: 'Monotone Y' },

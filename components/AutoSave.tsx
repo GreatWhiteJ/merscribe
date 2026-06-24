@@ -12,7 +12,8 @@ const NEU_BG = 'var(--neu-bg)'
 // Electron preload bridge (present only in the desktop app).
 interface DesktopBridge {
   getSavePath: () => Promise<string>
-  chooseSavePath: () => Promise<string | null>
+  openFile: () => Promise<{ path: string; content: string | null } | null>
+  saveAs: () => Promise<string | null>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadSession: () => Promise<any>
   loadFile: () => Promise<string | null>
@@ -256,29 +257,60 @@ export function AutoSave({ syntax }: { syntax: string }) {
     }
   }, [syntax])
 
-  const choose = async () => {
+  // Parse a .md and lay it out onto the canvas (used by Open).
+  const loadOntoCanvas = async (text: string) => {
+    const parsed = parseDocument(text)
+    const opts = {
+      direction: parsed.direction,
+      theme: parsed.theme,
+      look: parsed.look,
+      curveStyle: parsed.curveStyle,
+    }
+    const laidOut = await autoArrange(parsed.nodes, parsed.edges, opts)
+    useFlowStore.getState().importDiagram(laidOut, parsed.edges, opts)
+  }
+
+  // Open an existing .md and load it onto the canvas; auto-save then tracks it.
+  const openExisting = async () => {
     const d = getDesktop()
     if (d) {
-      const path = await d.chooseSavePath()
-      if (path) {
-        setName(baseName(path))
-        linkedRef.current = true
-        // If the chosen file already holds a document, OPEN it (load to canvas)
-        // rather than overwriting it; otherwise seed it with the current canvas.
-        const existing = d.loadFile ? await d.loadFile() : null
-        if (existing && existing.trim()) {
-          const parsed = parseDocument(existing)
-          const opts = {
-            direction: parsed.direction,
-            theme: parsed.theme,
-            look: parsed.look,
-            curveStyle: parsed.curveStyle,
-          }
-          const laidOut = await autoArrange(parsed.nodes, parsed.edges, opts)
-          useFlowStore.getState().importDiagram(laidOut, parsed.edges, opts)
-        }
-        write()
-      }
+      const res = await d.openFile()
+      if (!res) return // cancelled
+      setName(baseName(res.path))
+      linkedRef.current = true
+      if (res.content && res.content.trim()) await loadOntoCanvas(res.content)
+      write()
+      return
+    }
+    if (!fsaSupported) return
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const [h] = await (window as any).showOpenFilePicker({
+        startIn: 'downloads',
+        types: [{ description: 'Markdown', accept: { 'text/markdown': ['.md'] } }],
+      })
+      const file = await h.getFile()
+      const text = await file.text()
+      handleRef.current = h
+      setName(h.name)
+      linkedRef.current = true
+      if (text && text.trim()) await loadOntoCanvas(text)
+      await write()
+    } catch {
+      /* user cancelled */
+    }
+  }
+
+  // Save As: choose a new name/location; the current canvas is written there and
+  // becomes the new auto-save target. The canvas content is unchanged.
+  const saveAs = async () => {
+    const d = getDesktop()
+    if (d) {
+      const path = await d.saveAs()
+      if (!path) return // cancelled
+      setName(baseName(path))
+      linkedRef.current = true
+      write()
       return
     }
     if (!fsaSupported) return
@@ -316,29 +348,58 @@ export function AutoSave({ syntax }: { syntax: string }) {
   const label = !name ? 'Auto-save' : status === 'saving' ? 'Saving…' : status === 'error' ? 'Save failed' : name
 
   return (
-    <button
-      onClick={choose}
-      title={name ? `Auto-saving to ${name} — click to change file or location` : 'Start auto-saving your .md to a file (choose name & location)'}
-      aria-label={name ? `Auto-saving to ${name}` : 'Start auto-save'}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 7,
-        background: NEU_BG,
-        border: 'none',
-        borderRadius: 50,
-        boxShadow: name ? 'var(--neu-shadow-inset)' : 'var(--neu-shadow-raised)',
-        padding: '7px 12px',
-        cursor: 'pointer',
-        fontSize: 12,
-        fontWeight: 600,
-        color: name ? '#4b5563' : '#4F46E5',
-        maxWidth: 190,
-        flexShrink: 0,
-      }}
-    >
-      <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-      <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-    </button>
+    <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+      {/* Open an existing .md file */}
+      <button
+        onClick={openExisting}
+        title="Open a .md file"
+        aria-label="Open a .md file"
+        style={{
+          background: NEU_BG,
+          border: 'none',
+          borderRadius: 12,
+          boxShadow: 'var(--neu-shadow-raised)',
+          width: 36,
+          height: 36,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          color: '#6B7280',
+          flexShrink: 0,
+        }}
+      >
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1" />
+          <path d="M3 9h16.5a1 1 0 0 1 .97 1.243l-1.5 6A1 1 0 0 1 18 17H4a1 1 0 0 1-1-1V9Z" />
+        </svg>
+      </button>
+
+      {/* Save-status pill — shows the current auto-save file; click to Save As */}
+      <button
+        onClick={saveAs}
+        title={name ? `Auto-saving to ${name} — click to Save As (new name or location)` : 'Save As — choose a file to auto-save your .md to'}
+        aria-label={name ? `Auto-saving to ${name}. Save As` : 'Save As'}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          background: NEU_BG,
+          border: 'none',
+          borderRadius: 50,
+          boxShadow: name ? 'var(--neu-shadow-inset)' : 'var(--neu-shadow-raised)',
+          padding: '7px 12px',
+          cursor: 'pointer',
+          fontSize: 12,
+          fontWeight: 600,
+          color: name ? '#4b5563' : '#4F46E5',
+          maxWidth: 190,
+          flexShrink: 0,
+        }}
+      >
+        <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
+        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
+      </button>
+    </span>
   )
 }

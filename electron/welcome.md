@@ -19,6 +19,9 @@ flowchart TD
   q3 -->|"I don't know THAT!"| gorge
   q3 -->|"What do you mean? African or European?"| cross
   q3 -.->|"consult"| facts
+  style start fill:#dbeafe,stroke:#3b82f6,color:#1e3a8a
+  style cross fill:#dcfce7,stroke:#22c55e,color:#166534
+  style gorge fill:#fee2e2,stroke:#ef4444,color:#991b1b
 ```
 
 ### Swallow Airspeed
@@ -42,3 +45,5 @@ This whole board is **one Markdown file** — edit it on the canvas or in the `.
 - Drag from a node's edge to connect two nodes
 - Drop a note onto a node to attach it (like the one on the table)
 - **Auto-arrange** in the toolbar tidies everything up
+
+🤖 **Using an AI agent?** Point it at `merscribe-agent-guide.md` (saved next to this diagram) — it explains how to build and edit this board from the file.

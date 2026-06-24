@@ -3,7 +3,8 @@ const { contextBridge, ipcRenderer } = require('electron')
 // Exposes a minimal, safe file API to the renderer for silent auto-save.
 contextBridge.exposeInMainWorld('desktop', {
   getSavePath: () => ipcRenderer.invoke('get-save-path'),
-  chooseSavePath: () => ipcRenderer.invoke('choose-save-path'),
+  openFile: () => ipcRenderer.invoke('open-file'),
+  saveAs: () => ipcRenderer.invoke('save-as'),
   loadSession: () => ipcRenderer.invoke('load-session'),
   loadFile: () => ipcRenderer.invoke('load-file'),
   save: (md, state) => ipcRenderer.invoke('save', md, state),

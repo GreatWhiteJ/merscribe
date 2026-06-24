@@ -361,13 +361,19 @@ export function FlowNode({ id, data, selected }: NodeProps) {
     }
     return (
       <div
-        className="relative w-full h-full cursor-pointer"
+        // Height fits the content (so notes grow with text instead of showing a
+        // pointless scrollbar); only very long notes hit maxHeight and scroll.
+        className="relative w-full cursor-pointer"
         style={{
           backgroundColor: nodeData.fillColor || '#fef9c3',
           border: `${strokeWidth}px solid ${nodeData.strokeColor || (selected ? '#3b82f6' : '#eab308')}`,
           borderRadius: 6,
           boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
           padding: 10,
+          minHeight: 46,
+          maxHeight: 240,
+          overflow: 'hidden',
+          boxSizing: 'border-box',
         }}
         onDoubleClick={handleDoubleClick}
         onMouseEnter={() => setIsHovered(true)}
@@ -375,7 +381,7 @@ export function FlowNode({ id, data, selected }: NodeProps) {
       >
         <NodeResizer
           minWidth={120}
-          minHeight={70}
+          minHeight={46}
           isVisible={!!selected || isHovered}
           onResizeEnd={() => pushHistory()}
         />
@@ -386,14 +392,17 @@ export function FlowNode({ id, data, selected }: NodeProps) {
             onBlur={noteCommit}
             onKeyDown={noteKeyDown}
             autoFocus
-            className="w-full h-full bg-transparent border-none outline-none resize-none text-sm leading-snug"
-            style={{ color: textColor, fontFamily: 'inherit', ...(nodeData.fontSize ? { fontSize: nodeData.fontSize } : {}) }}
+            // nowheel: scroll the textarea instead of zooming the canvas
+            className="nowheel w-full bg-transparent border-none outline-none resize-none text-sm leading-snug"
+            rows={4}
+            style={{ color: textColor, fontFamily: 'inherit', minHeight: 72, ...(nodeData.fontSize ? { fontSize: nodeData.fontSize } : {}) }}
             aria-label="Note text"
           />
         ) : (
           <div
-            className="w-full h-full overflow-auto text-sm leading-snug select-none"
-            style={{ color: textColor, whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...(nodeData.fontSize ? { fontSize: nodeData.fontSize } : {}) }}
+            // nowheel: a hovered sticky scrolls its own content rather than zooming
+            className="nowheel w-full overflow-auto text-sm leading-snug select-none"
+            style={{ color: textColor, maxHeight: 218, whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...(nodeData.fontSize ? { fontSize: nodeData.fontSize } : {}) }}
           >
             {nodeData.label}
           </div>

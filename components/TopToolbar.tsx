@@ -170,6 +170,10 @@ export function TopToolbar({ inspectorOpen, onToggleInspector, onOpenPalette, sy
           display: 'flex',
           alignItems: 'center',
           gap: 4,
+          // Never let a crowded toolbar push its end controls off-screen: cap to
+          // the available width and scroll horizontally instead of clipping.
+          maxWidth: '100%',
+          overflowX: 'auto',
         }}
       >
         {/* Layers / Inspector toggle */}

@@ -11,6 +11,7 @@ import type {
   NodeShape,
   Theme,
 } from './store'
+import { erNodeIds } from './blocks'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -219,11 +220,17 @@ function erIdent(raw: string, fallback: string): string {
   return /^[a-zA-Z_]/.test(s) ? s : `e_${s}`
 }
 
-/** Serialize entity nodes + relationship edges into an `erDiagram` block. */
+/**
+ * Serialize the ER block: entity nodes, their relationships, optional `subgraph`
+ * groups, and `style` lines for colored entities/groups. `erNodes` holds the
+ * entities AND any subgraph that contains entities (an ER group).
+ */
 export function serializeErd(
-  entities: Node<FlowNodeData>[],
+  erNodes: Node<FlowNodeData>[],
   edges: Edge<FlowEdgeData>[],
 ): string {
+  const entities = erNodes.filter((n) => n.data.isEntity)
+  const groups = erNodes.filter((n) => n.data.isSubgraph)
   const lines: string[] = ['erDiagram']
 
   // Map node id → unique entity name (suffix duplicates to keep them distinct).
@@ -238,21 +245,33 @@ export function serializeErd(
     nameById.set(ent.id, n)
   }
 
-  for (const ent of entities) {
+  // Lines for one entity declaration (header + fields), at a given indent.
+  const declOf = (ent: Node<FlowNodeData>, indent: string): string[] => {
     const name = nameById.get(ent.id)!
     const fields = ent.data.fields ?? []
-    if (fields.length === 0) {
-      lines.push(`  ${name}`)
-      continue
-    }
-    lines.push(`  ${name} {`)
+    if (fields.length === 0) return [`${indent}${name}`]
+    const out = [`${indent}${name} {`]
     for (const f of fields) {
       const type = erIdent(f.type, 'string')
       const fname = erIdent(f.name, 'field')
       const key = f.key ? ` ${f.key}` : ''
-      lines.push(`    ${type} ${fname}${key}`)
+      out.push(`${indent}  ${type} ${fname}${key}`)
     }
-    lines.push(`  }`)
+    out.push(`${indent}}`)
+    return out
+  }
+
+  // Which group each entity belongs to (only ER groups in this block).
+  const groupIds = new Set(groups.map((g) => g.id))
+  const groupOf = new Map<string, string>()
+  for (const ent of entities) if (ent.parentId && groupIds.has(ent.parentId)) groupOf.set(ent.id, ent.parentId)
+
+  // Ungrouped entities first, then each group block.
+  for (const ent of entities) if (!groupOf.has(ent.id)) lines.push(...declOf(ent, '  '))
+  for (const g of groups) {
+    lines.push(`  subgraph ${sanitizeId(g.id)} ["${escapeLabel(g.data.label || g.id)}"]`)
+    for (const ent of entities) if (groupOf.get(ent.id) === g.id) lines.push(...declOf(ent, '    '))
+    lines.push(`  end`)
   }
 
   const byId = new Map(entities.map((n) => [n.id, n]))
@@ -281,6 +300,19 @@ export function serializeErd(
       label = src && tgt ? `${src} → ${tgt}` : 'relates'
     }
     lines.push(`  ${a} ${card} ${b} : "${label.replace(/"/g, "'")}"`)
+  }
+
+  // Colors for entities/groups — same `style` syntax flowcharts use; Mermaid
+  // renders these on erDiagrams too, so they round-trip losslessly.
+  for (const n of [...entities, ...groups]) {
+    const parts: string[] = []
+    if (n.data.fillColor) parts.push(`fill:${n.data.fillColor}`)
+    if (n.data.strokeColor) parts.push(`stroke:${n.data.strokeColor}`)
+    if (n.data.textColor) parts.push(`color:${n.data.textColor}`)
+    if (parts.length > 0) {
+      const name = n.data.isSubgraph ? sanitizeId(n.id) : nameById.get(n.id)!
+      lines.push(`  style ${name} ${parts.join(',')}`)
+    }
   }
 
   return lines.join('\n')
@@ -319,9 +351,11 @@ export function serializeDocument(
 ): string {
   const entityNodes = nodes.filter((n) => n.data.isEntity)
   const tableNodes = nodes.filter((n) => n.data.isTable)
-  // The flowchart contains everything except ER entities — including TABLE nodes,
-  // which appear as reference nodes so they integrate and connect like any node.
-  const flowchartNodes = nodes.filter((n) => !n.data.isEntity)
+  // The ER block holds entities + any subgraph that groups them; the flowchart
+  // holds everything else (incl. TABLE nodes, which connect like any node).
+  const erIds = erNodeIds(nodes)
+  const erNodes = nodes.filter((n) => erIds.has(n.id))
+  const flowchartNodes = nodes.filter((n) => !erIds.has(n.id))
   const entityIds = new Set(entityNodes.map((n) => n.id))
 
   // ER block: edges where BOTH ends are entities. Flow block: every other edge
@@ -334,7 +368,19 @@ export function serializeDocument(
     blocks.push('```mermaid\n' + serialize(flowchartNodes, flowEdges, options) + '\n```')
   }
   if (entityNodes.length > 0) {
-    blocks.push('```mermaid\n' + serializeErd(entityNodes, erEdges) + '\n```')
+    // With no flowchart block to carry them, ride non-default settings (theme /
+    // look / curve) on a directive atop the ER block so they round-trip. It's
+    // valid Mermaid and doesn't affect erDiagram rendering.
+    let er = serializeErd(erNodes, erEdges)
+    if (flowchartNodes.length === 0) {
+      const { theme = 'default', look = 'classic', curveStyle = 'basis' } = options
+      const cfg: Record<string, unknown> = {}
+      if (theme !== 'default') cfg.theme = theme
+      if (look !== 'classic') cfg.look = look
+      if (curveStyle !== 'basis') cfg.flowchart = { curve: curveStyle }
+      if (Object.keys(cfg).length > 0) er = `%%{ init: ${JSON.stringify(cfg)} }%%\n` + er
+    }
+    blocks.push('```mermaid\n' + er + '\n```')
   }
   // Each table's rows live in the body, under a heading the flow node points to.
   for (const t of tableNodes) {

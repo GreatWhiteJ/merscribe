@@ -16,6 +16,11 @@ A MerScribe `.md` is ordinary Markdown made of these parts (only the flowchart b
 4. **`### Title`** sections containing prose — the body of a **note** object.
 5. **`### <Host Title> — notes`** sections — a note **attached** to another object.
 
+A file may hold **both** a flowchart block and an erDiagram block (plus tables/notes).
+MerScribe renders them together and shows a **block switcher** (All · Flow · ER) in the
+toolbar so each diagram can be viewed on its own. The blocks don't share nodes — keep each
+focused (e.g. a colored flowchart overview + a detailed erDiagram of the same schema).
+
 ---
 
 ## Flowcharts (boxes & arrows)
@@ -104,7 +109,7 @@ erDiagram
   }
   Order {
     int id PK
-    int customerId FK
+    int customerId FK "-> Customer"
   }
   Customer ||--o{ Order : "places"
 ```
@@ -112,7 +117,45 @@ erDiagram
 
 Crow's-foot cardinality: `||` one, `o{` zero-or-many, `|{` one-or-many, `o|` zero-or-one.
 
+**Field-level links.** MerScribe draws each relationship from the **foreign-key row** to the
+**primary-key row** it references (not box-to-box). It picks the fields by, in order:
+(1) a field named in the relationship label — `: "customerId"`; (2) an `FK` field whose
+comment points at the other entity — `customerId FK "-> Customer"` (also recognizes
+`"... link to customers"`); (3) a name match — `customerId` → `Customer`. **So annotate
+your FKs:** give them the `FK` key and a `"-> Target"` comment (or name them after the
+target). The crow's foot then lands on the exact FK/PK rows.
+
+**Grouping & color.** ER entities take the same `subgraph … end` grouping and
+`style` / `classDef`+`class` coloring as flowcharts — and MerScribe round-trips them:
+
+````markdown
+```mermaid
+erDiagram
+  subgraph core ["Geo core"]
+    Geographies { char geo_id PK }
+    GeoDivisions { char division_geo_id PK }
+  end
+  GeoDivisions }o..|| Geographies : "geo_id"
+  style Geographies fill:#089A9A,stroke:#067373,color:#ffffff
+  style core fill:#e0f2f1,stroke:#089A9A
+```
+````
+
+**Tables vs entities.** A Mermaid `erDiagram` cannot contain a GFM table — the entities ARE
+the tabular objects (their rows are fields). If you need a free-standing data table, use a
+flowchart `[["Title"]]` node (see Tables); it can live in the same file as the erDiagram.
+
 ---
+
+## Colors
+
+Color a node with a Mermaid `style` line in the flowchart block — `fill` (background), `stroke` (border), `color` (text):
+
+```
+style ok fill:#dcfce7,stroke:#22c55e,color:#166534
+```
+
+Edge color: `linkStyle <index> stroke:#3b82f6` (index = the edge's order in the block, from 0). Colors round-trip losslessly.
 
 ## Working effectively
 

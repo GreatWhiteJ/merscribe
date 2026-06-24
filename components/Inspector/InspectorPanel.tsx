@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFlowStore } from '@/lib/store'
-import { applyDagreLayout } from '@/lib/layout'
+import { autoArrange } from '@/lib/mermaidLayout'
 import { ObjectSettingsSection } from './ObjectSettingsSection'
 import { DiagramSettingsSection } from './DiagramSettingsSection'
 import { MermaidLiveSection } from './MermaidLiveSection'
@@ -83,10 +83,10 @@ export function InspectorPanel({ syntax, onCollapse }: InspectorPanelProps) {
   const { setNodes } = useFlowStore(useShallow((s) => ({ setNodes: s.setNodes })))
   const nodesLength = useFlowStore((s) => s.nodes.length)
 
-  const handleAutoLayout = () => {
-    const { nodes, edges, direction } = useFlowStore.getState()
+  const handleAutoLayout = async () => {
+    const { nodes, edges, direction, theme, look, curveStyle } = useFlowStore.getState()
     if (nodes.length === 0) return
-    setNodes(applyDagreLayout(nodes, edges, direction))
+    setNodes(await autoArrange(nodes, edges, { direction, theme, look, curveStyle }))
   }
 
   return (

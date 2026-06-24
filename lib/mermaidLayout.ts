@@ -3,6 +3,7 @@ import dagre from '@dagrejs/dagre'
 import type { Edge, Node } from '@xyflow/react'
 import type { CurveStyle, Direction, FlowEdgeData, FlowNodeData, Look, Theme } from './store'
 import { serializeDocument, extractMermaidBlocks } from './serializer'
+import { erNodeIds } from './blocks'
 
 // Layout for the canvas. We run Dagre (the same engine Mermaid uses) but feed it
 // each node's REAL rendered size — plain shapes measured by an off-screen Mermaid
@@ -67,8 +68,15 @@ function realSize(n: Node<FlowNodeData>, measured?: Size): Size {
     return { w: 220, h: 30 + fields * 26 + 24 }
   }
   if (d?.isNote) {
-    const lines = (d.label ?? '').split('\n').length
-    return { w: 210, h: Math.max(72, 18 + lines * 20) }
+    // Grow with content (longest line → width, wrapped lines → height) but
+    // stay within sane bounds so a long note doesn't take over the canvas.
+    const lines = (d.label ?? '').split('\n')
+    const longest = lines.reduce((m, l) => Math.max(m, l.length), 1)
+    const w = Math.min(280, Math.max(180, longest * 7 + 28))
+    const perLine = Math.max(12, Math.floor((w - 24) / 7))
+    const rows = lines.reduce((a, l) => a + Math.max(1, Math.ceil(l.length / perLine)), 0)
+    const h = Math.min(210, Math.max(64, 16 + rows * 20))
+    return { w, h }
   }
   return measured ?? { w: 150, h: 54 }
 }
@@ -102,9 +110,9 @@ function placeAttachedNotes(
     const host = note.parentId ? byId.get(note.parentId) : undefined
     if (!host) return note
     const hb = absOf(host)
-    // Size the sticky from its content (readable) but keep it compact.
+    // Size the sticky from its content (already bounded by realSize).
     const rs = realSize(note)
-    const nw = Math.min(rs.w, 230), nh = Math.min(rs.h, 170)
+    const nw = rs.w, nh = rs.h
     // Candidates hang the sticky off the host's bottom / top / left, anchored to
     // the host's left edge. We deliberately avoid the right edge: a host's
     // measured WIDTH is content-driven (esp. tables) and unknown here, so a
@@ -131,10 +139,11 @@ function placeAttachedNotes(
       ...note,
       parentId: host.id,
       extent: undefined, // allow the sticky to overhang the host
-      position: { x: c.x - hb.x, y: c.y - hb.y },
+      position: { x: c.x - hb.x, y: c.y - hb.y }, // rough; Canvas refines vs measured sizes
       width: nw,
-      height: nh,
-      style: { ...note.style, width: nw, height: nh },
+      height: undefined, // content-driven height (measured by the canvas)
+      style: { ...note.style, width: nw, height: undefined },
+      data: { ...note.data, autoPlaced: true },
     }
   })
   return [...positioned, ...placed] // hosts already precede their notes
@@ -156,42 +165,96 @@ export async function autoArrange(
   const structural = nodes.filter((n) => !isAttachedNote(n))
   const attached = nodes.filter(isAttachedNote)
 
-  const g = new dagre.graphlib.Graph({ compound: true })
-  g.setGraph({ rankdir: RANKDIR[settings.direction], nodesep: 55, ranksep: 60, marginx: 12, marginy: 12 })
-  g.setDefaultEdgeLabel(() => ({}))
+  // Lay out one disconnected group (flowchart OR ER) on its own, so the two
+  // blocks don't inflate each other's spacing. Returns the positioned nodes and
+  // the group's overall height (for stacking). `dense` tightens the ER block.
+  const layoutGroup = (group: Node<FlowNodeData>[], dense: boolean, cluster?: Map<string, string>): { positioned: Node<FlowNodeData>[]; height: number } => {
+    if (group.length === 0) return { positioned: [], height: 0 }
+    const g = new dagre.graphlib.Graph({ compound: true })
+    g.setGraph({
+      rankdir: RANKDIR[settings.direction],
+      nodesep: dense ? 36 : 55,
+      ranksep: dense ? 64 : 60,
+      marginx: 12,
+      marginy: 12,
+      ranker: 'network-simplex',
+    })
+    g.setDefaultEdgeLabel(() => ({}))
 
-  const sizes = new Map<string, Size>()
-  for (const n of structural) {
-    if (n.data?.isSubgraph) { g.setNode(n.id, { width: 0, height: 0, paddingX: 26, paddingY: 30 }); continue }
-    const s = realSize(n, measured?.get(n.id))
-    sizes.set(n.id, s)
-    g.setNode(n.id, { width: s.w, height: s.h })
-  }
-  const ids = new Set(structural.map((n) => n.id))
-  for (const n of structural) if (n.parentId && ids.has(n.parentId)) g.setParent(n.id, n.parentId)
-  for (const e of edges) if (g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target)
+    const ids = new Set(group.map((n) => n.id))
+    // Synthetic compound parents keep clustered nodes (e.g. ER entities mapped to
+    // the overview's domains) together; they aren't rendered, just layout hints.
+    if (cluster) for (const c of new Set(cluster.values())) g.setNode(c, {})
+    const sizes = new Map<string, Size>()
+    for (const n of group) {
+      if (n.data?.isSubgraph) { g.setNode(n.id, { width: 0, height: 0, paddingX: 26, paddingY: 30 }); continue }
+      const s = realSize(n, measured?.get(n.id))
+      sizes.set(n.id, s)
+      g.setNode(n.id, { width: s.w, height: s.h })
+    }
+    for (const n of group) {
+      if (n.parentId && ids.has(n.parentId)) g.setParent(n.id, n.parentId)
+      else if (cluster?.has(n.id)) g.setParent(n.id, cluster.get(n.id)!)
+    }
+    for (const e of edges) if (ids.has(e.source) && ids.has(e.target) && g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target)
 
-  try { dagre.layout(g) } catch { return nodes }
+    try { dagre.layout(g) } catch { return { positioned: group, height: 0 } }
 
-  const positioned: Node<FlowNodeData>[] = structural.map((n) => {
-    const ln = g.node(n.id)
-    if (!ln) return n
-    if (n.data?.isSubgraph) {
-      return {
-        ...n,
-        position: { x: ln.x - ln.width / 2, y: ln.y - ln.height / 2 },
-        width: ln.width, height: ln.height,
-        style: { ...n.style, width: ln.width, height: ln.height },
+    let height = 0
+    const positioned = group.map((n) => {
+      const ln = g.node(n.id)
+      if (!ln) return n
+      if (n.data?.isSubgraph) {
+        height = Math.max(height, ln.y + ln.height / 2)
+        return {
+          ...n,
+          position: { x: ln.x - ln.width / 2, y: ln.y - ln.height / 2 },
+          width: ln.width, height: ln.height,
+          style: { ...n.style, width: ln.width, height: ln.height },
+        }
       }
-    }
-    const s = sizes.get(n.id) ?? { w: ln.width, h: ln.height }
-    let pos = { x: ln.x - s.w / 2, y: ln.y - s.h / 2 }
-    if (n.parentId) {
-      const pl = g.node(n.parentId)
-      if (pl) pos = { x: pos.x - (pl.x - pl.width / 2), y: pos.y - (pl.y - pl.height / 2) }
-    }
-    return { ...n, position: pos, width: s.w, height: s.h, style: { ...n.style, width: s.w, height: s.h } }
-  })
+      const s = sizes.get(n.id) ?? { w: ln.width, h: ln.height }
+      let pos = { x: ln.x - s.w / 2, y: ln.y - s.h / 2 }
+      height = Math.max(height, pos.y + s.h)
+      if (n.parentId) {
+        const pl = g.node(n.parentId)
+        if (pl) pos = { x: pos.x - (pl.x - pl.width / 2), y: pos.y - (pl.y - pl.height / 2) }
+      }
+      if (n.data?.isNote) {
+        // Notes set width only; height fits the content (measured by the canvas).
+        return { ...n, position: pos, width: s.w, height: undefined, style: { ...n.style, width: s.w, height: undefined } }
+      }
+      return { ...n, position: pos, width: s.w, height: s.h, style: { ...n.style, width: s.w, height: s.h } }
+    })
+    return { positioned, height }
+  }
 
-  return placeAttachedNotes(positioned, attached, subgraphIds)
+  // Cluster ER entities by the overview's domains: a grouped flow node's label
+  // (e.g. "Geographies") maps the entity of the same name into that subgraph's
+  // cluster, so the ER block groups the way the flowchart overview does.
+  const labelToGroup = new Map<string, string>()
+  for (const n of structural) {
+    if (!n.data?.isSubgraph && n.parentId && subgraphIds.has(n.parentId)) {
+      const lbl = (n.data?.label ?? '').trim().toLowerCase()
+      if (lbl) labelToGroup.set(lbl, n.parentId)
+    }
+  }
+  const erCluster = new Map<string, string>()
+  for (const n of structural) {
+    if (!n.data?.isEntity) continue
+    const grp = labelToGroup.get((n.data?.label ?? '').trim().toLowerCase())
+    if (grp) erCluster.set(n.id, `cl_${grp}`)
+  }
+
+  const erIds = erNodeIds(nodes)
+  const flowRes = layoutGroup(structural.filter((n) => !erIds.has(n.id)), false)
+  const erRes = layoutGroup(structural.filter((n) => erIds.has(n.id)), true, erCluster.size ? erCluster : undefined)
+  // Stack the ER block below the flowchart so the combined view reads as two
+  // zones (the block switcher shows them one at a time).
+  const offset = flowRes.height > 0 && erRes.positioned.length > 0 ? flowRes.height + 100 : 0
+  const erShifted = offset
+    ? erRes.positioned.map((n) => ({ ...n, position: { x: n.position.x, y: n.position.y + offset } }))
+    : erRes.positioned
+
+  return placeAttachedNotes([...flowRes.positioned, ...erShifted], attached, subgraphIds)
 }

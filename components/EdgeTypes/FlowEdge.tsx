@@ -1,9 +1,18 @@
 'use client'
 
-import { BaseEdge, EdgeLabelRenderer, getBezierPath, type EdgeProps } from '@xyflow/react'
+import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  getBezierPath,
+  getSmoothStepPath,
+  getStraightPath,
+  useInternalNode,
+  type EdgeProps,
+} from '@xyflow/react'
 import { useCallback, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFlowStore, type FlowEdgeData, type FlowMarker, type ErEnd } from '@/lib/store'
+import { getErEdgeParams } from '@/lib/floatingEdge'
 import { flowMarkerUrl, erMarkerUrl } from './EdgeMarkers'
 
 export function FlowEdge({
@@ -19,14 +28,40 @@ export function FlowEdge({
   label,
   data,
 }: EdgeProps) {
-  const [edgePath, labelX, labelY] = getBezierPath({
-    sourceX,
-    sourceY,
-    sourcePosition,
-    targetX,
-    targetY,
-    targetPosition,
-  })
+  const curveStyle = useFlowStore((s) => s.curveStyle)
+  const sourceNode = useInternalNode(source)
+  const targetNode = useInternalNode(target)
+  const edgeData = data as FlowEdgeData | undefined
+
+  // ER relationship? (both ends are entities) — then tie the FK row to the PK row.
+  const isEr = useFlowStore(
+    useShallow((s) => {
+      const a = s.nodes.find((n) => n.id === source)
+      const b = s.nodes.find((n) => n.id === target)
+      return !!a?.data.isEntity && !!b?.data.isEntity
+    }),
+  )
+
+  // ER edges attach field-to-field on whichever side faces the other entity;
+  // flow edges use their normal handles. Routing follows the curve style:
+  // step* → right-angle, linear → straight, else curved.
+  const erp = isEr
+    ? getErEdgeParams(sourceNode, targetNode, edgeData?.sourceFieldIndex, edgeData?.targetFieldIndex)
+    : null
+  const sx = erp?.sx ?? sourceX
+  const sy = erp?.sy ?? sourceY
+  const tx = erp?.tx ?? targetX
+  const ty = erp?.ty ?? targetY
+  const sPos = erp?.sourcePos ?? sourcePosition
+  const tPos = erp?.targetPos ?? targetPosition
+
+  const orthogonal = curveStyle === 'step' || curveStyle === 'stepAfter' || curveStyle === 'stepBefore'
+  const straight = curveStyle === 'linear'
+  const [edgePath, labelX, labelY] = orthogonal
+    ? getSmoothStepPath({ sourceX: sx, sourceY: sy, sourcePosition: sPos, targetX: tx, targetY: ty, targetPosition: tPos, borderRadius: 6 })
+    : straight
+      ? getStraightPath({ sourceX: sx, sourceY: sy, targetX: tx, targetY: ty })
+      : getBezierPath({ sourceX: sx, sourceY: sy, sourcePosition: sPos, targetX: tx, targetY: ty, targetPosition: tPos })
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState((label as string) ?? '')
@@ -46,19 +81,9 @@ export function FlowEdge({
     [commitLabel]
   )
 
-  const edgeData = data as FlowEdgeData | undefined
   const edgeStyle = edgeData?.edgeStyle ?? 'solid'
   const strokeColor = edgeData?.strokeColor ?? '#9ca3af'
   const displayLabel = label as string | undefined
-
-  // Is this an ER relationship (both endpoints are entities)?
-  const isEr = useFlowStore(
-    useShallow((s) => {
-      const a = s.nodes.find((n) => n.id === source)
-      const b = s.nodes.find((n) => n.id === target)
-      return !!a?.data.isEntity && !!b?.data.isEntity
-    }),
-  )
 
   // Markers per end. ER edges use crow's-foot; flow edges use arrow/circle/cross.
   const markerStart = isEr

@@ -6,12 +6,14 @@ import {
   BackgroundVariant,
   ConnectionMode,
   useReactFlow,
+  useNodesInitialized,
   type Node,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { useCallback, useEffect, useRef, useState, type MouseEvent, type DragEvent } from 'react'
 
 import { useFlowStore, type FlowNodeData } from '@/lib/store'
+import { erNodeIds } from '@/lib/blocks'
 import { FlowNode } from './NodeTypes/FlowNode'
 import { FlowEdge } from './EdgeTypes/FlowEdge'
 import { EdgeMarkerDefs } from './EdgeTypes/EdgeMarkers'
@@ -114,13 +116,75 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
     pushHistory, assignToSubgraph,
     drawingShape, setDrawingShape,
     setDropTargetId, setSpawnCenter,
+    activeBlock, setActiveBlock,
   } = useFlowStore()
-  const { screenToFlowPosition } = useReactFlow()
+  const { screenToFlowPosition, fitView } = useReactFlow()
 
   // ── Draw-mode state ─────────────────────────────────────────────────────────
   const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null)
   const [dragCurrent, setDragCurrent] = useState<{ x: number; y: number } | null>(null)
   const wrapperRef = useRef<HTMLDivElement>(null)
+
+  // ── Kitty-corner placement of auto-placed attached notes ───────────────────
+  // Auto-layout flags attached notes as `autoPlaced` (with only a rough spot).
+  // Once the canvas has measured every node we know real sizes, so place each
+  // note diagonally off its host's most-open corner, then clear the flag.
+  const nodesInitialized = useNodesInitialized()
+  const pendingNotes = nodes
+    .filter((n) => n.data?.isNote && n.parentId && n.data?.autoPlaced)
+    .map((n) => n.id)
+    .join('|')
+  useEffect(() => {
+    if (!nodesInitialized || !pendingNotes) return
+    const all = useFlowStore.getState().nodes
+    const subgraphIds = new Set(all.filter((n) => n.data?.isSubgraph).map((n) => n.id))
+    const boxOf = (n: Node<FlowNodeData>) => {
+      const { w, h } = dimsOf(n, 200, 80)
+      let x = n.position.x, y = n.position.y
+      if (n.parentId) { const p = all.find((m) => m.id === n.parentId); if (p) { x += p.position.x; y += p.position.y } }
+      return { x, y, w, h }
+    }
+    const obstacles = all.filter((n) => !n.data?.isNote && !subgraphIds.has(n.id)).map((n) => ({ id: n.id, b: boxOf(n) }))
+    const overlap = (a: { x: number; y: number; w: number; h: number }, b: { x: number; y: number; w: number; h: number }) => {
+      const dx = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
+      const dy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+      return dx > 0 && dy > 0 ? dx * dy : 0
+    }
+    const TUCK = 14 // how far the sticky tucks across the host's edge
+    let changed = false
+    const updated = all.map((n) => {
+      if (!(n.data?.isNote && n.parentId && n.data?.autoPlaced)) return n
+      const host = all.find((m) => m.id === n.parentId)
+      if (!host) return { ...n, data: { ...n.data, autoPlaced: false } }
+      const hb = boxOf(host)
+      const nb = boxOf(n)
+      // Attach ALONG an edge but OFFSET toward a corner: the sticky overlaps
+      // ~1/3 of that edge and tucks across it by TUCK, then hangs off. Prefer
+      // the bottom edge; fall back to top, then the sides.
+      const fx = hb.w / 3, fy = hb.h / 3
+      const cands: Record<string, { x: number; y: number }> = {
+        bottomRight: { x: hb.x + hb.w - fx, y: hb.y + hb.h - TUCK },
+        bottomLeft: { x: hb.x + fx - nb.w, y: hb.y + hb.h - TUCK },
+        topRight: { x: hb.x + hb.w - fx, y: hb.y - nb.h + TUCK },
+        topLeft: { x: hb.x + fx - nb.w, y: hb.y - nb.h + TUCK },
+        rightBottom: { x: hb.x + hb.w - TUCK, y: hb.y + hb.h - fy },
+        leftBottom: { x: hb.x - nb.w + TUCK, y: hb.y + hb.h - fy },
+      }
+      const order = ['bottomRight', 'bottomLeft', 'topRight', 'topLeft', 'rightBottom', 'leftBottom']
+      let best = order[0], bestScore = Infinity
+      for (const k of order) {
+        const c = cands[k]
+        const cb = { x: c.x, y: c.y, w: nb.w, h: nb.h }
+        let score = 0
+        for (const o of obstacles) { if (o.id === host.id) continue; score += overlap(cb, o.b) }
+        if (score < bestScore - 1) { bestScore = score; best = k }
+      }
+      const c = cands[best]
+      changed = true
+      return { ...n, position: { x: c.x - hb.x, y: c.y - hb.y }, data: { ...n.data, autoPlaced: false } }
+    })
+    if (changed) useFlowStore.getState().setNodes(updated)
+  }, [pendingNotes, nodesInitialized])
 
   // ── Keyboard shortcuts ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -389,6 +453,32 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
       }
     : null
 
+  // ── Block view: show one Mermaid block at a time when asked ─────────────────
+  // ER nodes are entities; everything else (flow nodes, subgraphs, tables, notes)
+  // is the flowchart block. Edges are ER when both ends are entities.
+  const entityIds = new Set(nodes.filter((n) => n.data?.isEntity).map((n) => n.id))
+  const erIds = erNodeIds(nodes)
+  const hasEr = entityIds.size > 0
+  const hasFlow = nodes.some((n) => !erIds.has(n.id))
+  const viewNodes =
+    activeBlock === 'all'
+      ? nodes
+      : activeBlock === 'er'
+        ? nodes.filter((n) => erIds.has(n.id))
+        : nodes.filter((n) => !erIds.has(n.id))
+  const viewEdges =
+    activeBlock === 'all'
+      ? edges
+      : activeBlock === 'er'
+        ? edges.filter((e) => entityIds.has(e.source) && entityIds.has(e.target))
+        : edges.filter((e) => !entityIds.has(e.source) && !entityIds.has(e.target))
+
+  // Re-frame when the active block changes.
+  useEffect(() => {
+    const t = setTimeout(() => fitView({ duration: 300, padding: 0.15 }), 60)
+    return () => clearTimeout(t)
+  }, [activeBlock, fitView])
+
   return (
     <div
       ref={wrapperRef}
@@ -401,8 +491,8 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
       onDrop={handleDrop}
     >
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
+        nodes={viewNodes}
+        edges={viewEdges}
         nodeTypes={nodeTypes}
         edgeTypes={edgeTypes}
         onNodesChange={onNodesChange}
@@ -414,6 +504,8 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={updateSpawnCenter}
         fitView
+        minZoom={0.05}
+        maxZoom={3}
         deleteKeyCode={['Backspace', 'Delete']}
         panOnDrag={drawingShape ? false : [1, 2]}
         selectionOnDrag={!drawingShape}
@@ -423,6 +515,47 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
       >
         <Background variant={BackgroundVariant.Dots} gap={24} size={2} color="#d1d9e6" />
       </ReactFlow>
+
+      {/* Block switcher — floats top-left, only when the file has both a
+          flowchart and an ER block. Kept out of the toolbar so it can't crowd
+          the file controls off-screen. */}
+      {hasFlow && hasEr && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: 16,
+            display: 'flex',
+            gap: 2,
+            background: 'var(--neu-bg)',
+            borderRadius: 50,
+            boxShadow: 'var(--neu-shadow-raised)',
+            padding: 4,
+            zIndex: 15,
+          }}
+          title="Show one diagram at a time"
+        >
+          {([['all', 'All'], ['flow', 'Flow'], ['er', 'ER']] as const).map(([val, lbl]) => (
+            <button
+              key={val}
+              onClick={() => setActiveBlock(val)}
+              aria-label={`Show ${lbl}`}
+              style={{
+                border: 'none',
+                borderRadius: 50,
+                padding: '4px 12px',
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: activeBlock === val ? '#4F46E5' : 'transparent',
+                color: activeBlock === val ? '#fff' : '#6B7280',
+              }}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+      )}
 
       <EdgeMarkerDefs />
 

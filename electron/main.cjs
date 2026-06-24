@@ -1,7 +1,8 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const http = require('http')
+const https = require('https')
 
 app.setName('MerScribe') // stable userData path for the saved session
 
@@ -93,10 +94,15 @@ async function createWindow() {
   const sess = readSession()
   savePath = (sess && sess.savePath) || path.join(app.getPath('downloads'), 'diagram.md')
   // First run (no linked file and no prior session): seed a friendly example
-  // diagram so new users land on something to play with, not a blank canvas.
+  // diagram so new users land on something to play with, not a blank canvas,
+  // and drop an agent-instructions file next to it for AI agents.
   if (!fs.existsSync(savePath) && !(sess && sess.state)) {
     try {
       fs.writeFileSync(savePath, fs.readFileSync(path.join(__dirname, 'welcome.md'), 'utf8'), 'utf8')
+      const guidePath = path.join(path.dirname(savePath), 'merscribe-agent-guide.md')
+      if (!fs.existsSync(guidePath)) {
+        fs.writeFileSync(guidePath, fs.readFileSync(path.join(__dirname, 'agent-guide.md'), 'utf8'), 'utf8')
+      }
     } catch { /* ignore — fall back to a blank canvas */ }
   }
   const win = new BrowserWindow({
@@ -132,21 +138,38 @@ ipcMain.handle('load-file', () => {
   try { return fs.readFileSync(savePath, 'utf8') } catch { return null }
 })
 
-// Pick a .md to open/link. Uses an Open dialog (not Save) so there's no
-// "overwrite?" warning — selecting a file opens it, then auto-save tracks it.
-ipcMain.handle('choose-save-path', async () => {
-  const r = await dialog.showOpenDialog({
+// Open an existing .md. Pure Open dialog (must-exist, no "create?"/"overwrite?"
+// prompt) — the renderer loads the returned content onto the canvas and
+// auto-save then tracks this file in place.
+ipcMain.handle('open-file', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, {
     defaultPath: savePath,
-    properties: ['openFile', 'createDirectory', 'promptToCreate'],
+    properties: ['openFile'],
     filters: [{ name: 'Markdown', extensions: ['md'] }],
   })
-  if (!r.canceled && r.filePaths && r.filePaths[0]) {
-    savePath = r.filePaths[0]
-    writeSession({ ...(readSession() || {}), savePath })
-    watchSavePath() // follow the newly-linked file
-    return savePath
-  }
-  return null
+  if (r.canceled || !r.filePaths || !r.filePaths[0]) return null
+  savePath = r.filePaths[0]
+  writeSession({ ...(readSession() || {}), savePath })
+  watchSavePath() // follow the newly-opened file
+  let content = null
+  try { content = fs.readFileSync(savePath, 'utf8') } catch { /* unreadable */ }
+  return { path: savePath, content }
+})
+
+// Save As: choose a new name/location for the current canvas. Classic Save
+// dialog (the overwrite confirmation here is expected). The renderer writes the
+// current document to the chosen path, which becomes the new auto-save target.
+ipcMain.handle('save-as', async () => {
+  const r = await dialog.showSaveDialog(mainWindow, {
+    defaultPath: savePath,
+    filters: [{ name: 'Markdown', extensions: ['md'] }],
+    properties: ['createDirectory', 'showOverwriteConfirmation'],
+  })
+  if (r.canceled || !r.filePath) return null
+  savePath = r.filePath
+  writeSession({ ...(readSession() || {}), savePath })
+  watchSavePath() // follow the new target
+  return savePath
 })
 
 // Writes the clean .md export to disk and persists the full state for restore.
@@ -158,6 +181,60 @@ ipcMain.handle('save', async (_e, md, state) => {
   return true
 })
 
-app.whenReady().then(createWindow)
+// ── Update check ─────────────────────────────────────────────────────────────
+// On launch, ask GitHub for the latest release and, if it's newer than this
+// build, offer to open the download page. Lightweight and signing-agnostic:
+// it notifies rather than silently installing, so it works on every platform.
+const UPDATE_REPO = 'GreatWhiteJ/merscribe'
+
+function cmpVersions(a, b) {
+  const pa = String(a).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0)
+  const pb = String(b).replace(/^v/, '').split('.').map((n) => parseInt(n, 10) || 0)
+  for (let i = 0; i < 3; i++) {
+    if ((pa[i] || 0) !== (pb[i] || 0)) return (pa[i] || 0) > (pb[i] || 0) ? 1 : -1
+  }
+  return 0
+}
+
+function checkForUpdates() {
+  const req = https.get(
+    {
+      hostname: 'api.github.com',
+      path: `/repos/${UPDATE_REPO}/releases/latest`,
+      headers: { 'User-Agent': 'MerScribe', Accept: 'application/vnd.github+json' },
+    },
+    (res) => {
+      if (res.statusCode !== 200) { res.resume(); return }
+      let body = ''
+      res.on('data', (c) => { body += c })
+      res.on('end', () => {
+        try {
+          const rel = JSON.parse(body)
+          const latest = rel.tag_name || rel.name
+          if (!latest || cmpVersions(latest, app.getVersion()) <= 0) return
+          const url = rel.html_url || `https://github.com/${UPDATE_REPO}/releases/latest`
+          dialog
+            .showMessageBox(mainWindow, {
+              type: 'info',
+              title: 'Update available',
+              message: `MerScribe ${latest.replace(/^v/, '')} is available`,
+              detail: `You're running ${app.getVersion()}. Open the download page?`,
+              buttons: ['Download', 'Later'],
+              defaultId: 0,
+              cancelId: 1,
+            })
+            .then(({ response }) => { if (response === 0) shell.openExternal(url) })
+        } catch { /* malformed response — ignore */ }
+      })
+    },
+  )
+  req.on('error', () => { /* offline / rate-limited — ignore silently */ })
+  req.setTimeout(8000, () => req.destroy())
+}
+
+app.whenReady().then(() => {
+  createWindow()
+  setTimeout(checkForUpdates, 3500) // after the window settles
+})
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit() })
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow() })

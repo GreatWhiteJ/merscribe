@@ -2,7 +2,7 @@
 
 import { useShallow } from 'zustand/react/shallow'
 import { useFlowStore, type Direction, type Theme, type CurveStyle } from '@/lib/store'
-import { applyDagreLayout } from '@/lib/layout'
+import { autoArrange } from '@/lib/mermaidLayout'
 import { DIRECTIONS, THEMES, CURVE_STYLES } from '@/components/ShapeIcons'
 
 const NEU_BG = 'var(--neu-bg)'
@@ -84,10 +84,10 @@ export function DiagramSettingsSection() {
       }))
     )
 
-  const handleDirectionChange = (dir: Direction) => {
+  const handleDirectionChange = async (dir: Direction) => {
     setDirection(dir)
-    const { nodes, edges } = useFlowStore.getState()
-    if (nodes.length > 0) setNodes(applyDagreLayout(nodes, edges, dir))
+    const { nodes, edges, theme, look, curveStyle } = useFlowStore.getState()
+    if (nodes.length > 0) setNodes(await autoArrange(nodes, edges, { direction: dir, theme, look, curveStyle }))
   }
 
   return (

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-06-24
+
+### Added
+- **Field-level ER relationships** — a relationship now connects the foreign-key row to the primary-key row it references (not box-to-box), attaching on whichever side faces the other entity. The FK/PK fields are inferred from the crow's-foot direction plus FK comments (`factor_id FK "-> factors"`) and relationship labels.
+- **ER grouping & color** — `erDiagram` blocks support `subgraph … end` groups and `style` / `classDef` + `class` coloring on entities and groups, just like flowcharts. Parsed, rendered, and round-tripped losslessly (renders in MerScribe and in plain Mermaid/GitHub).
+- **Block switcher** — when a document holds more than one Mermaid block (e.g. a flowchart overview + a detailed `erDiagram`), a floating `All / Flow / ER` control shows one at a time; each block is laid out independently.
+- **Classic Open / Save As** — a dedicated Open button loads an existing `.md` (no overwrite prompt), and the save-status pill is Save As. Replaces the single conflated file picker.
+- **Right-angle & straight edge routing** — the canvas honors the Curve Style: `step*` → orthogonal, `linear` → straight, else curved.
+- **Automatic update check** — on launch the app asks GitHub for the latest release and, if a newer one exists, offers to open the download page.
+- **Agent guide companion** — `merscribe-agent-guide.md` is seeded next to the diagram on first run; the guide now covers multi-block files, field-level FK annotation, and ER grouping/colors.
+
+### Changed
+- **Tighter, domain-clustered ER layout** — each block lays out on its own, and ER entities cluster by the overview's domains when present.
+- **Zoom out further** — minimum zoom lowered (0.5 → 0.05) so large schemas fit; toolbar is overflow-safe.
+- **Sticky notes** fit their content (grow with text, scroll only when huge) and tuck onto a host edge offset toward the corner.
+
+### Fixed
+- **Toolbar overflow** — the Open / Save As controls could be pushed off-screen when the toolbar got crowded; the switcher moved to a floating control and the toolbar now caps width instead of clipping.
+- **Phantom ER entities** — `style` / `subgraph` lines inside an `erDiagram` block were mis-parsed into junk `style`/`fill` entities; now handled correctly.
+
 ## [Unreleased]
 
 ### Added
