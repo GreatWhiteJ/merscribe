@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.10] - 2026-06-24
+
+### Fixed
+- **Top toolbar no longer scrolls** — it expands to its natural width instead of being trapped in a horizontal scroll box.
+- **Block switcher (All / Flow / ER) is always available** from launch, not just when a document already contains both a flowchart and an ER block.
+
 ## [0.1.9] - 2026-06-24
 
 ### Added

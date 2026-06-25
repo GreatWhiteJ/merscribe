@@ -458,8 +458,6 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
   // is the flowchart block. Edges are ER when both ends are entities.
   const entityIds = new Set(nodes.filter((n) => n.data?.isEntity).map((n) => n.id))
   const erIds = erNodeIds(nodes)
-  const hasEr = entityIds.size > 0
-  const hasFlow = nodes.some((n) => !erIds.has(n.id))
   const viewBase =
     activeBlock === 'all'
       ? nodes
@@ -522,46 +520,43 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
         <Background variant={BackgroundVariant.Dots} gap={24} size={2} color="#d1d9e6" />
       </ReactFlow>
 
-      {/* Block switcher — floats top-left, only when the file has both a
-          flowchart and an ER block. Kept out of the toolbar so it can't crowd
-          the file controls off-screen. */}
-      {hasFlow && hasEr && (
-        <div
-          style={{
-            position: 'absolute',
-            top: 16,
-            left: 16,
-            display: 'flex',
-            gap: 2,
-            background: 'var(--neu-bg)',
-            borderRadius: 50,
-            boxShadow: 'var(--neu-shadow-raised)',
-            padding: 4,
-            zIndex: 15,
-          }}
-          title="Show one diagram at a time"
-        >
-          {([['all', 'All'], ['flow', 'Flow'], ['er', 'ER']] as const).map(([val, lbl]) => (
-            <button
-              key={val}
-              onClick={() => setActiveBlock(val)}
-              aria-label={`Show ${lbl}`}
-              style={{
-                border: 'none',
-                borderRadius: 50,
-                padding: '4px 12px',
-                fontSize: 11,
-                fontWeight: 600,
-                cursor: 'pointer',
-                background: activeBlock === val ? '#4F46E5' : 'transparent',
-                color: activeBlock === val ? '#fff' : '#6B7280',
-              }}
-            >
-              {lbl}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* Block view switcher — always available, floats top-left (kept out of the
+          toolbar so it never crowds the file controls). */}
+      <div
+        style={{
+          position: 'absolute',
+          top: 16,
+          left: 16,
+          display: 'flex',
+          gap: 2,
+          background: 'var(--neu-bg)',
+          borderRadius: 50,
+          boxShadow: 'var(--neu-shadow-raised)',
+          padding: 4,
+          zIndex: 15,
+        }}
+        title="Show one diagram block at a time"
+      >
+        {([['all', 'All'], ['flow', 'Flow'], ['er', 'ER']] as const).map(([val, lbl]) => (
+          <button
+            key={val}
+            onClick={() => setActiveBlock(val)}
+            aria-label={`Show ${lbl}`}
+            style={{
+              border: 'none',
+              borderRadius: 50,
+              padding: '4px 12px',
+              fontSize: 11,
+              fontWeight: 600,
+              cursor: 'pointer',
+              background: activeBlock === val ? '#4F46E5' : 'transparent',
+              color: activeBlock === val ? '#fff' : '#6B7280',
+            }}
+          >
+            {lbl}
+          </button>
+        ))}
+      </div>
 
       <EdgeMarkerDefs />
 
