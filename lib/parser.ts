@@ -337,8 +337,11 @@ export function parseMermaidFlowchart(syntax: string, skipLayout = false): Parse
       if (!existing) {
         const node = makeNode(ref.id, ref.label, ref.shape)
         if (currentSubgraphId) {
+          // Parent the node but don't lock it with extent:'parent' — group
+          // membership is reconciled on drag-stop (drag a node out to ungroup,
+          // in to join), and an extent lock would defeat that. The group is
+          // auto-grown to contain its children instead (see store growGroupToFit).
           node.parentId = currentSubgraphId
-          node.extent = 'parent'
         }
         nodesMap.set(ref.id, node)
       } else if (ref.explicit) {
@@ -578,13 +581,24 @@ function parseEr(src: string): { nodes: Node<FlowNodeData>[]; edges: Edge<FlowEd
     return out
   }
   const findPk = (ent: string) => (fieldMeta.get(ent) ?? []).findIndex((f) => f.key === 'PK')
-  // Find the field on `holder` that references `other`: by the relationship label
-  // naming a field, then by an FK comment pointing at `other`, then by name.
+  // Whole-word match of `needle` inside `hay`. Used so a relationship label only
+  // claims a field when it actually names it — not when the field name happens to
+  // be a substring (e.g. label "paid invoices" must NOT match a field "id").
+  const wordHit = (hay: string, needle: string) => {
+    if (!needle) return false
+    const esc = needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    return new RegExp(`\\b${esc}\\b`, 'i').test(hay)
+  }
+  // Find the field on `holder` that references `other`, most-reliable signal
+  // first: (1) an FK comment that points at `other` (explicit & unambiguous);
+  // (2) a field named after the target (customerId -> Customer); (3) the label
+  // naming a field by whole word; (4) the lone FK field. A descriptive label
+  // is checked only after the explicit signals, so prose like "paid invoices"
+  // can't hijack a field it happens to contain.
   const findFk = (holder: string, other: string, label: string) => {
     const fields = fieldMeta.get(holder) ?? []
     const o = norm(other)
     const ln = (label || '').toLowerCase()
-    if (ln) for (let i = 0; i < fields.length; i++) if (fields[i].name && ln.includes(fields[i].name.toLowerCase())) return i
     for (let i = 0; i < fields.length; i++) {
       const toks = refToks(fields[i].comment)
       if (toks.some((t) => t === o || t.startsWith(o) || o.startsWith(t))) return i
@@ -593,6 +607,7 @@ function parseEr(src: string): { nodes: Node<FlowNodeData>[]; edges: Edge<FlowEd
       const fn = norm(fields[i].name)
       if (fn === o + 'id' || fn === o) return i
     }
+    if (ln) for (let i = 0; i < fields.length; i++) if (wordHit(ln, fields[i].name)) return i
     for (let i = 0; i < fields.length; i++) if (fields[i].key === 'FK') return i
     return -1
   }
@@ -665,15 +680,36 @@ function parseEr(src: string): { nodes: Node<FlowNodeData>[]; edges: Edge<FlowEd
       const manyLeft = /[}{]/.test(leftSym)
       const manyRight = /[}{]/.test(rightSym)
       let sFI: number, tFI: number
-      if (manyRight && !manyLeft) { tFI = findFk(b, a, label); sFI = findPk(a) }
+      let relLabel = label
+      // A field-link encoding written by the serializer for an unlabeled
+      // field→field relationship: `sourceField → targetField`. Resolve both
+      // rows by exact name and don't show the encoding as a visible label.
+      const arrow = label.match(/^\s*(.+?)\s*(?:→|->)\s*(.+?)\s*$/)
+      const idxByName = (ent: string, nm: string) => (fieldMeta.get(ent) ?? []).findIndex((f) => f.name === nm)
+      if (arrow) {
+        sFI = idxByName(a, arrow[1].trim())
+        tFI = idxByName(b, arrow[2].trim())
+        relLabel = ''
+      }
+      else if (manyRight && !manyLeft) { tFI = findFk(b, a, label); sFI = findPk(a) }
       else if (manyLeft && !manyRight) { sFI = findFk(a, b, label); tFI = findPk(b) }
       else {
         const fkB = findFk(b, a, label)
         if (fkB >= 0) { tFI = fkB; sFI = findPk(a) }
         else { const fkA = findFk(a, b, label); if (fkA >= 0) { sFI = fkA; tFI = findPk(b) } else { sFI = findPk(a); tFI = findPk(b) } }
       }
+      // Never leave an ER endpoint unresolved: an entity with no PK/FK marker
+      // would otherwise attach to the box's vertical center (looks unanchored).
+      // Fall back to the first field — conventionally the key row.
+      if (sFI < 0 && (fieldMeta.get(a)?.length ?? 0) > 0) sFI = 0
+      if (tFI < 0 && (fieldMeta.get(b)?.length ?? 0) > 0) tFI = 0
       edges.push({
-        id: `er_${edgeIdx++}`, source: a, target: b, type: 'flowEdge', label,
+        id: `er_${edgeIdx++}`, source: a, target: b, type: 'flowEdge', label: relLabel,
+        // Pin the endpoints to the field connectors so React Flow's edge ends
+        // (and its reconnect anchors) sit on the fields — letting the user drag
+        // an endpoint to a different field to re-target the relationship.
+        ...(sFI >= 0 ? { sourceHandle: `f-${sFI}-s` } : {}),
+        ...(tFI >= 0 ? { targetHandle: `f-${tFI}-t` } : {}),
         data: {
           edgeStyle: conn.includes('..') ? 'dashed' : 'solid',
           erStart: ER_LEFT_REV[leftSym] ?? 'one',
@@ -772,6 +808,9 @@ export function parseDocument(md: string): ParseResult {
     theme: flow.theme,
     look: flow.look,
     curveStyle: flow.curveStyle,
-    error: null,
+    // Surface the flowchart parser's message only when nothing at all rendered,
+    // so a real syntax error reaches the user (import preview / load warning)
+    // but a doc that still produced nodes (e.g. a valid ER block) isn't flagged.
+    error: laid.length === 0 ? flow.error ?? null : null,
   }
 }

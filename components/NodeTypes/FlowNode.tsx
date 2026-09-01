@@ -1,8 +1,8 @@
 'use client'
 
 import { Handle, Position, NodeResizer, type NodeProps } from '@xyflow/react'
-import { useCallback, useRef, useState } from 'react'
-import { useFlowStore, type FlowNodeData, type NodeShape } from '@/lib/store'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useFlowStore, entityFitHeight, type FlowNodeData, type NodeShape } from '@/lib/store'
 
 // ─── SVG shape paths (viewBox 0 0 200 100, preserveAspectRatio="none") ────────
 // All points are in the 200×100 coordinate space so they stretch with the node.
@@ -275,6 +275,13 @@ function NodeLabel({
   )
 }
 
+// ─── Sticky-note geometry ─────────────────────────────────────────────────────
+const NOTE_PAD = 10
+const NOTE_BORDER = 2
+const NOTE_MIN_W = 140
+// A one-line note still reads as a note, not a strip of tape.
+const NOTE_MIN_H = 64
+
 // ─── Main FlowNode component ──────────────────────────────────────────────────
 export function FlowNode({ id, data, selected }: NodeProps) {
   const nodeData = data as FlowNodeData
@@ -296,14 +303,81 @@ export function FlowNode({ id, data, selected }: NodeProps) {
   const dropRing: React.CSSProperties = isDropTarget ? { outline: '2px solid #4F46E5', outlineOffset: 2 } : {}
   const updateEntityField = useFlowStore((s) => s.updateEntityField)
   const addEntityField = useFlowStore((s) => s.addEntityField)
+  const removeEntityField = useFlowStore((s) => s.removeEntityField)
   const updateTableHeader = useFlowStore((s) => s.updateTableHeader)
   const updateTableCell = useFlowStore((s) => s.updateTableCell)
   const addTableRow = useFlowStore((s) => s.addTableRow)
   const addTableColumn = useFlowStore((s) => s.addTableColumn)
   const removeTableRow = useFlowStore((s) => s.removeTableRow)
   const removeTableColumn = useFlowStore((s) => s.removeTableColumn)
-  const [editRow, setEditRow] = useState<number | null>(null)
   const [editCell, setEditCell] = useState<{ r: number; c: number } | null>(null)
+  // ── Sticky-note sizing ─────────────────────────────────────────────────
+  // A note's WIDTH is always yours to drag. Its HEIGHT works one of two ways:
+  //   • by default it fits the text, however long that runs — type a whole
+  //     document and read all of it, nothing clipped, nothing to scroll;
+  //   • drag a top/bottom handle and the height is pinned there instead, and
+  //     the text scrolls inside the box you chose.
+  // "Fit to text" in the Inspector puts a pinned note back on auto-height.
+  const noteDownRef = useRef<{ x: number; y: number } | null>(null)
+  const noteBoxRef = useRef<HTMLDivElement>(null)
+  const noteAreaRef = useRef<HTMLTextAreaElement>(null)
+  const notePinned = !!nodeData.fixedHeight
+  const noteResizeRef = useRef<number | null>(null)
+  const fitNoteHeight = useFlowStore((s) => s.fitNoteHeight)
+  const markNoteSized = useFlowStore((s) => s.markNoteSized)
+  const setNoteFixedHeight = useFlowStore((s) => s.setNoteFixedHeight)
+
+  // Resize handlers, memoized: React Flow's ResizeControl lists them in an
+  // effect's deps and destroys the resizer on cleanup, so a new identity —
+  // or any re-render — mid-drag would drop the gesture. Which is also why the
+  // box follows the handle by direct DOM writes rather than component state.
+  const noteResizeStart = useCallback((_e: unknown, p: { height: number }) => {
+    noteResizeRef.current = p.height
+    const box = noteBoxRef.current
+    if (box) { box.dataset.resizing = '1'; box.style.height = `${p.height}px` }
+  }, [])
+  const noteResize = useCallback((_e: unknown, p: { height: number }) => {
+    const box = noteBoxRef.current
+    if (box) box.style.height = `${p.height}px`
+  }, [])
+  const noteResizeEnd = useCallback((_e: unknown, p: { height: number }) => {
+    const start = noteResizeRef.current
+    noteResizeRef.current = null
+    const box = noteBoxRef.current
+    if (box) { delete box.dataset.resizing; box.style.height = '' }
+    markNoteSized(id)
+    // Only a height change pins the note; a width-only drag leaves it fitting.
+    if (start !== null && Math.abs(p.height - start) > 2) setNoteFixedHeight(id, true)
+    pushHistory()
+  }, [id, markNoteSized, setNoteFixedHeight, pushHistory])
+
+  // Keep the editing textarea exactly as tall as what's been typed into it —
+  // unless the height is pinned, where the textarea fills the box and scrolls
+  // the same way the read view does.
+  useLayoutEffect(() => {
+    const el = noteAreaRef.current
+    if (!el || notePinned) return
+    el.style.height = 'auto'
+    el.style.height = `${el.scrollHeight}px`
+  }, [draft, editing, nodeData.fontSize, notePinned])
+
+  // Report the note's natural height back to the node, and re-measure whenever
+  // the box reflows (wider/narrower, bigger font, more text).
+  useEffect(() => {
+    if (!nodeData.isNote || notePinned) return
+    const box = noteBoxRef.current
+    if (!box) return
+    const measure = () => {
+      // Mid-resize the box height is the handle's, not the text's — measuring
+      // it would write the drag back as if it were the fitted height.
+      if (noteResizeRef.current !== null) return
+      fitNoteHeight(id, Math.max(NOTE_MIN_H, Math.round(box.offsetHeight)))
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(box)
+    return () => ro.disconnect()
+  }, [nodeData.isNote, notePinned, id, fitNoteHeight])
   const navRef = useRef(false) // true while moving between table cells (skip blur-exit)
 
   const commitLabel = useCallback(() => {
@@ -313,10 +387,13 @@ export function FlowNode({ id, data, selected }: NodeProps) {
   }, [draft, id, updateNodeLabel])
 
   const handleDoubleClick = useCallback(() => {
+    // Already editing? Leave it alone. Re-running this would reset the draft and
+    // wipe the selection out from under a double-click-to-select-a-word.
+    if (editing) return
     setDraft(nodeData.label)
     setEditing(true)
     setTimeout(() => inputRef.current?.select(), 0)
-  }, [nodeData.label])
+  }, [nodeData.label, editing])
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -359,51 +436,104 @@ export function FlowNode({ id, data, selected }: NodeProps) {
         noteCommit()
       }
     }
+    // The read view and the edit view share one typography/box spec, so the note
+    // never reflows or jumps when you drop into editing — the textarea *is* the
+    // note, edge to edge. Both scroll (or don't) together, depending on whether
+    // the height is pinned.
+    const noteText: React.CSSProperties = {
+      color: textColor,
+      fontFamily: 'inherit',
+      fontSize: nodeData.fontSize ?? 14,
+      lineHeight: 1.375,
+      whiteSpace: 'pre-wrap',
+      wordBreak: 'break-word',
+      padding: NOTE_PAD,
+      margin: 0,
+      boxSizing: 'border-box',
+      border: 'none',
+      background: 'transparent',
+      width: '100%',
+      display: 'block',
+      height: notePinned ? '100%' : undefined,
+      overflow: notePinned ? 'auto' : 'hidden',
+    }
+    // nowheel only while the note actually scrolls — otherwise the wheel should
+    // zoom the canvas as usual, even over a page-tall note. `note-body` lets the
+    // stylesheet make the text scroll mid-resize too (see .note-box in globals).
+    const noteBodyCls = `note-body${notePinned ? ' nowheel' : ''}`
     return (
       <div
-        // Height fits the content (so notes grow with text instead of showing a
-        // pointless scrollbar); only very long notes hit maxHeight and scroll.
-        className="relative w-full cursor-pointer"
+        ref={noteBoxRef}
+        // Auto-height: the box lays out at its natural height and hands that
+        // height back (see the sizing effect above), so text is never cut off.
+        // Pinned: the box is exactly the node's height and the text scrolls.
+        className="note-box relative w-full"
         style={{
           backgroundColor: nodeData.fillColor || '#fef9c3',
-          border: `${strokeWidth}px solid ${nodeData.strokeColor || (selected ? '#3b82f6' : '#eab308')}`,
+          // A constant border width — a thicker one on select would re-wrap the
+          // text and re-measure the whole note every time you click it.
+          border: `${NOTE_BORDER}px solid ${nodeData.strokeColor || (selected ? '#3b82f6' : '#eab308')}`,
           borderRadius: 6,
-          boxShadow: '0 1px 3px rgba(0,0,0,0.12)',
-          padding: 10,
-          minHeight: 46,
-          maxHeight: 240,
-          overflow: 'hidden',
+          boxShadow: selected ? '0 0 0 2px rgba(59,130,246,0.45)' : '0 1px 3px rgba(0,0,0,0.12)',
+          // No overflow:hidden — it would clip the NodeResizer's corner handles
+          // down to a sliver and make the note feel un-resizable.
           boxSizing: 'border-box',
+          height: notePinned ? '100%' : undefined,
+          minHeight: NOTE_MIN_H,
+          cursor: editing ? 'text' : 'move',
         }}
         onDoubleClick={handleDoubleClick}
+        // A second click on an already-selected note drops into editing, so
+        // highlighting text is just click, then click-and-drag. Track the
+        // pointer so a drag that *moves* the note doesn't count as that click.
+        onPointerDown={(e) => { noteDownRef.current = { x: e.clientX, y: e.clientY } }}
+        onClick={(e) => {
+          const d = noteDownRef.current
+          noteDownRef.current = null
+          if (!d || editing || !selected) return
+          if (Math.abs(e.clientX - d.x) > 3 || Math.abs(e.clientY - d.y) > 3) return
+          handleDoubleClick()
+        }}
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
+        {/* Drag it as wide and as tall as you like, no upper bound. Changing the
+            height pins it — the text then scrolls inside the box you chose. A
+            width-only drag leaves the height fitting the text, as before. */}
         <NodeResizer
-          minWidth={120}
-          minHeight={46}
+          minWidth={NOTE_MIN_W}
+          minHeight={NOTE_MIN_H}
           isVisible={!!selected || isHovered}
-          onResizeEnd={() => pushHistory()}
+          onResizeStart={noteResizeStart}
+          onResize={noteResize}
+          onResizeEnd={noteResizeEnd}
         />
         {editing ? (
           <textarea
+            ref={noteAreaRef}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onBlur={noteCommit}
             onKeyDown={noteKeyDown}
+            // Every pointer gesture stays inside the textarea, so the browser's
+            // own text editing applies untouched: drag to select, double-click a
+            // word, triple-click the line — as in any other text box. Without
+            // these the node's own click/double-click handlers ran too and reset
+            // the draft mid-selection.
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            onDoubleClick={(e) => e.stopPropagation()}
             autoFocus
-            // nowheel: scroll the textarea instead of zooming the canvas
-            className="nowheel w-full bg-transparent border-none outline-none resize-none text-sm leading-snug"
-            rows={4}
-            style={{ color: textColor, fontFamily: 'inherit', minHeight: 72, ...(nodeData.fontSize ? { fontSize: nodeData.fontSize } : {}) }}
+            rows={1}
+            // nodrag: click-and-drag inside the note selects text instead of
+            // moving the node.
+            className={`nodrag outline-none resize-none ${noteBodyCls}`}
+            style={{ ...noteText, userSelect: 'text', cursor: 'text' }}
             aria-label="Note text"
           />
         ) : (
-          <div
-            // nowheel: a hovered sticky scrolls its own content rather than zooming
-            className="nowheel w-full overflow-auto text-sm leading-snug select-none"
-            style={{ color: textColor, maxHeight: 218, whiteSpace: 'pre-wrap', wordBreak: 'break-word', ...(nodeData.fontSize ? { fontSize: nodeData.fontSize } : {}) }}
-          >
+          <div className={`select-none ${noteBodyCls}`} style={noteText}>
             {nodeData.label}
           </div>
         )}
@@ -420,13 +550,21 @@ export function FlowNode({ id, data, selected }: NodeProps) {
     const accent = nodeData.strokeColor || '#475569'
     const headerBg = selected ? '#4F46E5' : accent
     const stroke = selected ? '#4F46E5' : accent
-    const inlineInput: React.CSSProperties = {
-      border: '1px solid #c7d2fe',
+    // Entity field cells are always directly editable — click a cell and type;
+    // no separate edit mode. Cells look like plain text until focused.
+    const cellBase: React.CSSProperties = {
+      border: '1px solid transparent',
       borderRadius: 4,
       padding: '1px 4px',
-      fontSize: 11,
-      minWidth: 0,
+      background: 'transparent',
       outline: 'none',
+      minWidth: 0,
+      fontSize: 'inherit',
+      fontFamily: 'inherit',
+    }
+    const cellFocus = {
+      onFocus: (e: React.FocusEvent<HTMLElement>) => { e.currentTarget.style.background = '#eef2ff'; e.currentTarget.style.borderColor = '#c7d2fe' },
+      onBlur: (e: React.FocusEvent<HTMLElement>) => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.borderColor = 'transparent' },
     }
     const dot: React.CSSProperties = {
       width: 9,
@@ -435,12 +573,11 @@ export function FlowNode({ id, data, selected }: NodeProps) {
       border: '2px solid #fff',
       zIndex: 30,
     }
-    const exitEdit = (e: React.KeyboardEvent) => {
+    // Keep keystrokes inside the cell (don't bubble to canvas delete/shortcuts);
+    // Enter/Escape just commit and blur.
+    const onCellKey = (e: React.KeyboardEvent) => {
       e.stopPropagation()
-      if (e.key === 'Enter' || e.key === 'Escape') {
-        e.preventDefault()
-        setEditRow(null)
-      }
+      if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); (e.target as HTMLElement).blur() }
     }
     return (
       <div
@@ -455,9 +592,12 @@ export function FlowNode({ id, data, selected }: NodeProps) {
         onMouseEnter={() => setIsHovered(true)}
         onMouseLeave={() => setIsHovered(false)}
       >
+        {/* Height is locked to fit every field (the box can never be shorter or
+            taller than its content); only the width is user-resizable. */}
         <NodeResizer
           minWidth={180}
-          minHeight={HEADER_H + ROW_H}
+          minHeight={entityFitHeight(fields.length)}
+          maxHeight={entityFitHeight(fields.length)}
           isVisible={!!selected || isHovered}
           onResizeEnd={() => pushHistory()}
         />
@@ -480,63 +620,72 @@ export function FlowNode({ id, data, selected }: NodeProps) {
           <NodeLabel {...labelProps} color="#ffffff" />
         </div>
 
-        {/* Field rows — double-click a row to edit it inline */}
+        {/* Field rows — every cell is directly editable: click name/type/key and
+            type (or pick). No edit mode, no popup. Drag the title bar to move. */}
         {fields.map((f, i) => (
           <div
             key={i}
             className="nodrag"
-            onDoubleClick={(e) => { e.stopPropagation(); setEditRow(i) }}
             style={{
               height: ROW_H,
               display: 'flex',
               alignItems: 'center',
-              gap: 6,
-              padding: '0 12px',
+              gap: 4,
+              padding: '0 8px',
               borderTop: '1px solid #eef2f7',
               fontSize: nodeData.fontSize ?? 12,
               color: '#1f2937',
             }}
           >
-            {editRow === i ? (
-              <>
-                <input
-                  className="nodrag"
-                  autoFocus
-                  value={f.name}
-                  placeholder="name"
-                  onChange={(e) => updateEntityField(id, i, { name: e.target.value })}
-                  onKeyDown={exitEdit}
-                  onBlur={() => setEditRow(null)}
-                  style={{ ...inlineInput, flex: 2 }}
-                />
-                <input
-                  className="nodrag"
-                  value={f.type}
-                  placeholder="type"
-                  onChange={(e) => updateEntityField(id, i, { type: e.target.value })}
-                  onKeyDown={exitEdit}
-                  style={{ ...inlineInput, flex: 2 }}
-                />
-                <select
-                  className="nodrag"
-                  value={f.key}
-                  onChange={(e) => updateEntityField(id, i, { key: e.target.value as typeof f.key })}
-                  onKeyDown={exitEdit}
-                  style={{ ...inlineInput, width: 46 }}
-                >
-                  <option value="">—</option>
-                  <option value="PK">PK</option>
-                  <option value="FK">FK</option>
-                  <option value="UK">UK</option>
-                </select>
-              </>
-            ) : (
-              <>
-                <span style={{ flex: 1, fontWeight: 600, color: textColor, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{f.name}</span>
-                <span style={{ color: '#9ca3af' }}>{f.type}</span>
-                <span style={{ width: 26, textAlign: 'right', fontWeight: 700, color: '#6366f1', fontSize: 10 }}>{f.key}</span>
-              </>
-            )}
+            <input
+              className="nodrag"
+              value={f.name}
+              placeholder="name"
+              title="Field name"
+              onChange={(e) => updateEntityField(id, i, { name: e.target.value })}
+              onKeyDown={onCellKey}
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{ ...cellBase, flex: 1, fontWeight: 600, color: textColor }}
+              {...cellFocus}
+            />
+            <input
+              className="nodrag"
+              value={f.type}
+              placeholder="type"
+              title="Field type"
+              onChange={(e) => updateEntityField(id, i, { type: e.target.value })}
+              onKeyDown={onCellKey}
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{ ...cellBase, width: 62, color: '#9ca3af', textAlign: 'right' }}
+              {...cellFocus}
+            />
+            <select
+              className="nodrag"
+              value={f.key}
+              title="Key — PK / FK / UK"
+              onChange={(e) => updateEntityField(id, i, { key: e.target.value as typeof f.key })}
+              onKeyDown={onCellKey}
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{ ...cellBase, width: 46, fontWeight: 700, color: '#6366f1', fontSize: 10, cursor: 'pointer', textAlign: 'center' }}
+              {...cellFocus}
+            >
+              <option value="">—</option>
+              <option value="PK">PK</option>
+              <option value="FK">FK</option>
+              <option value="UK">UK</option>
+            </select>
+            <button
+              className="nodrag"
+              title="Remove field"
+              aria-label="Remove field"
+              onClick={(e) => { e.stopPropagation(); removeEntityField(id, i) }}
+              onPointerDown={(e) => e.stopPropagation()}
+              style={{ border: 'none', background: 'transparent', color: '#d1d5db', cursor: 'pointer', fontSize: 14, lineHeight: 1, padding: '0 2px', flexShrink: 0 }}
+              onMouseEnter={(e) => (e.currentTarget.style.color = '#ef4444')}
+              onMouseLeave={(e) => (e.currentTarget.style.color = '#d1d5db')}
+            >
+              ×
+            </button>
           </div>
         ))}
 
@@ -793,17 +942,26 @@ export function FlowNode({ id, data, selected }: NodeProps) {
       <div
         className="relative w-full h-full rounded-xl"
         style={{
-          border: isDropTarget ? '2px solid #4F46E5' : `2px dashed ${strokeColor}`,
+          border: isDropTarget
+            ? '2px solid #4F46E5'
+            : selected
+              ? '2px solid #3b82f6'
+              : `2px dashed ${strokeColor}`,
+          boxShadow: selected ? '0 0 0 3px rgba(59,130,246,0.28)' : undefined,
           backgroundColor: isDropTarget
             ? 'rgba(79,70,229,0.12)'
-            : nodeData.fillColor
-              ? nodeData.fillColor
-              : 'rgba(59,130,246,0.04)',
-          transition: 'background-color 0.12s, border-color 0.12s',
-          // The empty interior is click-through, so dragging in it pans/selects
-          // the canvas (incl. right-drag) just like the open canvas. Interactive
-          // bits below opt back in via pointer-events.
-          pointerEvents: 'none',
+            : selected
+              ? 'rgba(59,130,246,0.10)'
+              : nodeData.fillColor
+                ? nodeData.fillColor
+                : 'rgba(59,130,246,0.04)',
+          transition: 'background-color 0.12s, border-color 0.12s, box-shadow 0.12s',
+          // The whole interior is the group's hit area: click anywhere inside to
+          // select it. Member nodes paint above the container (it sits at
+          // zIndex -1), so they win the hit test wherever they actually are —
+          // "inside the group but not over another object" falls out of that.
+          pointerEvents: 'all',
+          cursor: 'move',
         }}
       >
         <NodeResizer minWidth={200} minHeight={120} isVisible={!!selected} />

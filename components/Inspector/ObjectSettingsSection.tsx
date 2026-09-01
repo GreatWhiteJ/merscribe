@@ -133,7 +133,7 @@ function ColorSwatch({
 }
 
 export function ObjectSettingsSection() {
-  const { updateNodeStyle, updateEdgeType, updateEdgeLabel, addEntityField, updateEntityField, removeEntityField } =
+  const { updateNodeStyle, updateEdgeType, updateEdgeLabel, addEntityField, updateEntityField, removeEntityField, setNoteFixedHeight } =
     useFlowStore(
       useShallow((s) => ({
         updateNodeStyle: s.updateNodeStyle,
@@ -142,6 +142,7 @@ export function ObjectSettingsSection() {
         addEntityField: s.addEntityField,
         updateEntityField: s.updateEntityField,
         removeEntityField: s.removeEntityField,
+        setNoteFixedHeight: s.setNoteFixedHeight,
       }))
     )
 
@@ -186,6 +187,9 @@ export function ObjectSettingsSection() {
   // A single selected entity gets a field editor.
   const singleEntity =
     selectedNodes.length === 1 && selectedNodes[0].data.isEntity ? selectedNodes[0] : null
+
+  // Selected notes whose height is pinned to a hand-dragged box.
+  const pinnedNotes = selectedNodes.filter((n) => n.data.isNote && n.data.fixedHeight)
 
   // An edge is an ERD relationship only when both endpoints are entities.
   const isErEdge =
@@ -309,6 +313,22 @@ export function ObjectSettingsSection() {
               </NeuBtn>
             </div>
           </div>
+
+          {/* Notes only: a note whose height you dragged stays that tall and
+              scrolls. This hands it back to growing with its text. */}
+          {pinnedNotes.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 12 }}>
+              <span style={{ fontSize: 10, color: '#9ca3af' }}>Note height</span>
+              <div style={{ marginLeft: 'auto' }}>
+                <NeuBtn
+                  title="Grow the note back to the height its text needs"
+                  onClick={() => pinnedNotes.forEach((n) => setNoteFixedHeight(n.id, false))}
+                >
+                  Fit to text
+                </NeuBtn>
+              </div>
+            </div>
+          )}
 
           <NeuBtn
             onClick={() => selectedNodes.forEach((n) =>

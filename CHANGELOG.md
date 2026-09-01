@@ -5,6 +5,44 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **New document** — a **New** button (Ctrl+N) starts a blank diagram, linking a fresh `untitled.md` next to the current file (created on your first change, so it never litters empty files).
+- **Recent files** — an Open dropdown lists recently-opened `.md` files; pick one to reopen it without a file dialog.
+- **Corrupt-file warning** — opening a `.md` with invalid or unsupported syntax now shows a clear warning (with the specific parse error) and a **Copy for LLM** button that bundles the error, the file's contents, and what MerScribe can read — instead of silently opening a blank canvas. Your file on disk is never changed.
+- **Agent guide: what MerScribe reads (and ignores)** — the agent guides now spell out the exact supported subset and that anything else (other Mermaid diagram types, prose outside notes, unmatched `###` sections, HTML, positions, `session.json`) is silently dropped.
+
+### Changed
+- **The note editor is the note** — editing happens in place at the note's own size, font and padding, edge to edge, so nothing shifts or re-wraps when you start typing.
+- **Notes hold a whole document** — by default a note's height fits its text, however long it runs. No 240px cap, nothing cut off at the bottom; type or paste a full page and read all of it on the canvas. (The Mermaid build is unaffected — the diagram node stays a small labelled note, with the body in the Markdown section below.)
+- **…or shrink one and scroll it** — drag a note's top or bottom edge and the height stays exactly where you put it, with the text scrolling inside (the wheel scrolls the note instead of zooming the canvas). Select it and hit **Fit to text** in the Inspector to hand it back to auto-height.
+- **Note width is yours** — drag either side handle out as far as you like (the resize handles were being clipped by the note itself, which made them almost impossible to grab). The text re-wraps and, on an auto-height note, the height re-fits.
+- **Auto-arrange stops shrinking notes** — a note you've sized by hand keeps that exact box; auto-arrange re-positions it but never re-fits it. Notes it *does* fit (imported ones, ones you've never resized) get a readable column width and whatever height the text needs, instead of being squeezed into 280x210.
+- **Select text inside a note** — click a selected note to start editing, then click-and-drag to highlight; the drag selects text instead of moving the note.
+- **Groups select from anywhere inside them** — the whole interior is the group's hit area with a move cursor, instead of only a 26px title strip, and a selected group now actually looks selected (solid blue border, halo, tinted fill). Member objects still win wherever they sit, so "inside the group but not over something else" is exactly what you get. (Trade-off: dragging in a group's empty space now moves the group rather than box-selecting the canvas.)
+- **Lines are clickable and show it** — a 24px hit band along each line, a pointer cursor over it, and a selected line goes from a 2px grey hairline to a thicker blue one with a soft halo.
+- **Labelled lines break around their label** — the line is masked out behind its text rather than relying on the label painting over it, which is why it used to cut through the label sometimes and not others (a selected line is lifted above the label layer).
+- **Selection comes to the front** — a selected line or object is raised above its neighbours and stays the one you're clicking, which is what makes a bundle of overlapping lines workable.
+- **Notes attach to groups like they attach to boxes** — a slight overlap is enough; you no longer have to drop a note fully inside a group for it to belong to it.
+- **Clearer toolbar icons** — the shapes picker is now three flat 2-D primitives instead of an isometric cube, and the group button is a dashed container holding two members instead of a bare hexagon glyph.
+- **Clearer, safer file controls** — the file cluster is now explicit **New · Open · Save As**, and the save-status pill is a non-interactive indicator that always shows the linked file and its auto-save state (Auto-saved / Auto-saving…). Replacing the on-screen diagram (New / Open) asks for confirmation first.
+- **Entity fields are directly editable** — click any field's **name, type, or key** and edit in place (no double-click, no popup box), with a per-row remove (×) button. Previously only the name was editable and switching to type/key closed the editor.
+- **Entities always fit their fields** — an entity's height tracks its field list, so adding or removing a field grows/shrinks the box to contain every row. Fields can no longer spill outside the object, and the height can't be resized below its content.
+- **Draw ER relationships field-to-field** — drag from one entity field's connector to another's and the relationship anchors to exactly those rows; the field link is written into the `.md` (`sourceField → targetField`) so it round-trips losslessly.
+- **Reconnect edges** — drag an existing edge's endpoint to a different field (or node) to re-target the relationship; the field link updates and re-serializes.
+- **ER diagrams read better** — entities laid out **side by side** (so field-level relationships attach on the facing sides instead of stacking), and ER relationships always route as **right-angles**.
+- **Fewer edge styles** — the Curve Style picker is now just **Curved / Straight / Stepped**.
+
+### Fixed
+- **Files with an edge into a group open again** — a link pointing at a subgraph (`explore --> places`) threw out of the layout engine, and because the throw escaped the loader entirely the window just sat there: no diagram, and not even the corrupt-file warning. Such an edge is now excluded from *layout* only (it's still drawn), a layout that fails leaves the nodes unpositioned instead of taking the document down, and a hard error surfaces the warning dialog like any other unreadable file.
+- **A re-parented note stays where you dropped it** — attaching or detaching a note resolved its position one level up the parent chain instead of all the way, so a note dropped on a box that lived inside a group was flung off across the canvas and had to be hunted down. Notes that come loose now sit exactly where you left them, with a few px of drift to show they didn't attach.
+- **A newly-opened document is framed on arrival** — opening or importing a file kept the previous diagram's viewport, so the new one could land completely off-screen and looked like nothing had happened until you panned around. The canvas now re-frames whenever a document replaces it.
+- **Editing a note behaves like a text box** — double-click a word to select it, triple-click for the line, drag to select. The node's own click handlers were firing alongside the textarea's and resetting the draft mid-selection.
+- **ER arrows land on the correct field** — relationship endpoints are resolved from the FK comment and name match before the (descriptive) label, so a label like `"paid invoices"` can no longer grab the wrong row; an entity with no `PK` marker now anchors to its first row instead of floating to the box center.
+- **No more blank canvas for single-block files** — a document with only a flowchart (or only an ER diagram) always renders; the All/Flow/ER switcher appears only when both blocks are present, so you can't switch to an empty view.
+- **Group sizing & membership** — subgraphs auto-grow to contain their members (no spill when a node is dropped in), and imported and hand-made groups behave the same (drag a node out to ungroup, in to join).
+
 ## [0.1.10] - 2026-06-24
 
 ### Fixed

@@ -4,6 +4,9 @@ const { contextBridge, ipcRenderer } = require('electron')
 contextBridge.exposeInMainWorld('desktop', {
   getSavePath: () => ipcRenderer.invoke('get-save-path'),
   openFile: () => ipcRenderer.invoke('open-file'),
+  openPath: (p) => ipcRenderer.invoke('open-path', p),
+  newFile: () => ipcRenderer.invoke('new-file'),
+  getRecents: () => ipcRenderer.invoke('get-recents'),
   saveAs: () => ipcRenderer.invoke('save-as'),
   loadSession: () => ipcRenderer.invoke('load-session'),
   loadFile: () => ipcRenderer.invoke('load-file'),

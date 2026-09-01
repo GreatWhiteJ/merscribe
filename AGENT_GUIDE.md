@@ -23,6 +23,41 @@ focused (e.g. a colored flowchart overview + a detailed erDiagram of the same sc
 
 ---
 
+## What MerScribe reads — and what it silently drops
+
+MerScribe understands only the **specific subset** below. **Anything outside it is dropped
+on the next sync** — it never appears on the canvas, and it's erased when the canvas writes
+the file back. So only add the constructs listed here; don't invent new sections or formats.
+
+**Read (these round-trip losslessly):**
+
+- **One fenced `` ```mermaid `` block** containing a `flowchart` (TD/LR/BT/RL) — this is required.
+- Optionally a **second fenced `` ```mermaid `` block** containing an `erDiagram`.
+- Inside those blocks: the node shapes, edges, `subgraph … end` groups, and
+  `style` / `linkStyle` / `classDef` / `class` lines described below.
+- **`### <Node Title>`** sections whose heading **exactly matches** a node's title — a GFM
+  table (for a `[["Title"]]` table node) or prose (for a `>"Title"]` note node).
+- **`### <Object Title> — notes`** sections (an attached note; the separator is an em dash).
+
+**Ignored / dropped — do NOT use (MerScribe can't read them):**
+
+- **The `` ```mermaid `` fence is required.** Raw `flowchart` / `erDiagram` text without the
+  fence is not read.
+- **Other Mermaid diagram types** — `sequenceDiagram`, `classDiagram`, `stateDiagram`,
+  `gantt`, `pie`, `journey`, `mindmap`, etc. Only `flowchart` and `erDiagram` render.
+- **Any other Markdown** — paragraphs outside a note section, `#`/`##` headings, a `###`
+  section whose title matches no node, bullet/numbered lists, images, links, blockquotes,
+  raw HTML, YAML front-matter, or non-`mermaid` code fences.
+- **Layout** — x/y positions, coordinates, width/height. MerScribe owns layout; never set them.
+- **App internals** — `session.json` and the `out/` folder are off-limits. The `.md` is the
+  only source of truth; never read or write anything else.
+
+> Need to convey something that isn't a box, edge, group, table, or entity? Put it in a
+> **note** (`>"Title"]` + a `### Title` section). A note is the only place free-form prose
+> survives the round-trip.
+
+---
+
 ## Flowcharts (boxes & arrows)
 
 ````markdown
@@ -118,12 +153,14 @@ erDiagram
 Crow's-foot cardinality: `||` one, `o{` zero-or-many, `|{` one-or-many, `o|` zero-or-one.
 
 **Field-level links.** MerScribe draws each relationship from the **foreign-key row** to the
-**primary-key row** it references (not box-to-box). It picks the fields by, in order:
-(1) a field named in the relationship label — `: "customerId"`; (2) an `FK` field whose
-comment points at the other entity — `customerId FK "-> Customer"` (also recognizes
-`"... link to customers"`); (3) a name match — `customerId` → `Customer`. **So annotate
-your FKs:** give them the `FK` key and a `"-> Target"` comment (or name them after the
-target). The crow's foot then lands on the exact FK/PK rows.
+**primary-key row** it references (not box-to-box). It picks the fields most-reliable-first:
+(1) an `FK` field whose comment points at the other entity — `customerId FK "-> Customer"`
+(also recognizes `"... link to customers"`); (2) a name match — `customerId` → `Customer`;
+(3) a field named in the relationship label — `: "customerId"`. A descriptive label
+(e.g. `: "places"`) is **not** used to pick a field, so it can't accidentally grab the wrong
+one. **So annotate your FKs:** give them the `FK` key and a `"-> Target"` comment (or name
+them after the target). The crow's foot then lands on the exact FK/PK rows. If an entity has
+no `PK` marker, the link falls back to its first row rather than floating to the box center.
 
 **Grouping & color.** ER entities take the same `subgraph … end` grouping and
 `style` / `classDef`+`class` coloring as flowcharts — and MerScribe round-trips them:

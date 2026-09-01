@@ -9,7 +9,7 @@ import {
   useInternalNode,
   type EdgeProps,
 } from '@xyflow/react'
-import { useCallback, useState } from 'react'
+import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFlowStore, type FlowEdgeData, type FlowMarker, type ErEnd } from '@/lib/store'
 import { getErEdgeParams } from '@/lib/floatingEdge'
@@ -27,6 +27,7 @@ export function FlowEdge({
   targetPosition,
   label,
   data,
+  selected,
 }: EdgeProps) {
   const curveStyle = useFlowStore((s) => s.curveStyle)
   const sourceNode = useInternalNode(source)
@@ -55,8 +56,11 @@ export function FlowEdge({
   const sPos = erp?.sourcePos ?? sourcePosition
   const tPos = erp?.targetPos ?? targetPosition
 
-  const orthogonal = curveStyle === 'step' || curveStyle === 'stepAfter' || curveStyle === 'stepBefore'
-  const straight = curveStyle === 'linear'
+  // ER relationships always route as right-angles (that's the ER convention and
+  // it reads cleanly with field-level side attachment); flowchart edges follow
+  // the diagram's Curve Style.
+  const orthogonal = isEr || curveStyle === 'step' || curveStyle === 'stepAfter' || curveStyle === 'stepBefore'
+  const straight = !isEr && curveStyle === 'linear'
   const [edgePath, labelX, labelY] = orthogonal
     ? getSmoothStepPath({ sourceX: sx, sourceY: sy, sourcePosition: sPos, targetX: tx, targetY: ty, targetPosition: tPos, borderRadius: 6 })
     : straight
@@ -65,7 +69,18 @@ export function FlowEdge({
 
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState((label as string) ?? '')
+  // Measured size of the rendered label, used to cut the gap in the line above.
+  const labelRef = useRef<HTMLDivElement>(null)
+  const [labelBox, setLabelBox] = useState<{ w: number; h: number } | null>(null)
   const updateEdgeLabel = useFlowStore((s) => s.updateEdgeLabel)
+
+  useLayoutEffect(() => {
+    const el = labelRef.current
+    if (!el) return
+    const w = el.offsetWidth
+    const h = el.offsetHeight
+    setLabelBox((prev) => (prev && Math.abs(prev.w - w) < 1 && Math.abs(prev.h - h) < 1 ? prev : { w, h }))
+  }, [label, editing, draft])
 
   const commitLabel = useCallback(() => {
     updateEdgeLabel(id, draft.trim())
@@ -99,22 +114,59 @@ export function FlowEdge({
   if (edgeStyle === 'dashed') strokeDasharray = '7 4'
   if (edgeStyle === 'thick') strokeWidth = 4
 
+  // A selected line has to *say* it's selected: a 2px grey hairline going 2px
+  // grey is no feedback at all. It takes the accent colour, thickens, and picks
+  // up a soft halo so it reads as picked even against a busy diagram.
+  const SELECT_COLOR = '#3b82f6'
+
+  // A label needs a real hole in the line, not just an opaque background behind
+  // it: React Flow elevates a selected edge above the label layer, which is why
+  // a line would sometimes cut straight through its own text and sometimes not.
+  // Masking the stroke makes the break unconditional. offsetWidth/Height are
+  // pre-transform, so they're already in flow units — no zoom maths needed.
+  const maskId = `edge-label-gap-${id}`
+  const gap = labelBox && (editing || !!displayLabel)
+  const GAP_PAD = 3
+
   return (
     <>
+      {gap && (
+        <defs>
+          <mask id={maskId} maskUnits="userSpaceOnUse">
+            {/* white shows the stroke, black punches it out */}
+            <rect x={-1e6} y={-1e6} width={2e6} height={2e6} fill="white" />
+            <rect
+              x={labelX - labelBox.w / 2 - GAP_PAD}
+              y={labelY - labelBox.h / 2 - GAP_PAD}
+              width={labelBox.w + GAP_PAD * 2}
+              height={labelBox.h + GAP_PAD * 2}
+              rx={4}
+              fill="black"
+            />
+          </mask>
+        </defs>
+      )}
       <BaseEdge
+        mask={gap ? `url(#${maskId})` : undefined}
         id={id}
         path={edgePath}
         markerEnd={markerEnd}
         markerStart={markerStart}
+        // Well wider than the 1–4px of ink: the line is hittable anywhere along
+        // a ~24px band, which is what makes a thin edge practical to click.
+        interactionWidth={24}
         style={{
           strokeDasharray,
-          strokeWidth,
-          stroke: strokeColor,
+          strokeWidth: selected ? strokeWidth + 1.5 : strokeWidth,
+          stroke: selected ? SELECT_COLOR : strokeColor,
+          filter: selected ? 'drop-shadow(0 0 3px rgba(59,130,246,0.75))' : undefined,
+          transition: 'stroke 0.1s, stroke-width 0.1s',
         }}
       />
 
       <EdgeLabelRenderer>
         <div
+          ref={labelRef}
           style={{
             position: 'absolute',
             transform: `translate(-50%, -50%) translate(${labelX}px,${labelY}px)`,

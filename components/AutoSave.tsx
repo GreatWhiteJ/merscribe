@@ -13,6 +13,9 @@ const NEU_BG = 'var(--neu-bg)'
 interface DesktopBridge {
   getSavePath: () => Promise<string>
   openFile: () => Promise<{ path: string; content: string | null } | null>
+  openPath: (p: string) => Promise<{ path: string; content: string | null } | null>
+  newFile: () => Promise<string | null>
+  getRecents: () => Promise<string[]>
   saveAs: () => Promise<string | null>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   loadSession: () => Promise<any>
@@ -108,6 +111,44 @@ function getDesktop(): DesktopBridge | null {
 }
 const baseName = (p: string) => p.split(/[\\/]/).pop() || p
 
+const NO_DIAGRAM_MSG =
+  'No diagram was found. MerScribe expects a ```mermaid block containing a flowchart or erDiagram.'
+
+// Parse raw .md and either load it onto the canvas or raise a loadError. Returns
+// true on success. A non-empty file that parses to an error OR to zero nodes is
+// treated as corrupt/unsupported: we warn (with the raw text for Copy-for-LLM)
+// and leave the file on disk untouched (the empty-canvas auto-save guard). An
+// empty file is a legitimately empty diagram — no warning.
+async function applyDocText(text: string): Promise<boolean> {
+  // parseDocument *returns* soft errors, but a hard throw (a layout engine
+  // choking on an odd-but-legal diagram, say) used to escape here and leave the
+  // user staring at a window where nothing happened. Treat it as a load error.
+  let parsed: ParseResult
+  try {
+    parsed = parseDocument(text)
+  } catch (err) {
+    useFlowStore.getState().setLoadError({
+      message: `MerScribe hit an unexpected error reading this file: ${err instanceof Error ? err.message : String(err)}`,
+      content: text,
+    })
+    return false
+  }
+  if (text.trim() && (parsed.error || parsed.nodes.length === 0)) {
+    useFlowStore.getState().setLoadError({ message: parsed.error ?? NO_DIAGRAM_MSG, content: text })
+    return false
+  }
+  const opts = {
+    direction: parsed.direction,
+    theme: parsed.theme,
+    look: parsed.look,
+    curveStyle: parsed.curveStyle,
+  }
+  const laidOut = await autoArrange(parsed.nodes, parsed.edges, opts)
+  useFlowStore.getState().importDiagram(laidOut, parsed.edges, opts)
+  useFlowStore.getState().setLoadError(null)
+  return true
+}
+
 /**
  * Continuous auto-save of the generated .md document.
  *  - Desktop (Electron): writes silently to disk via IPC, auto-starts on load
@@ -129,15 +170,19 @@ export function AutoSave({ syntax }: { syntax: string }) {
   const diskRef = useRef<string | null>(null)
   const [desktop, setDesktop] = useState<DesktopBridge | null>(null)
   const [fsaSupported, setFsaSupported] = useState(true)
+  const [recents, setRecents] = useState<string[]>([])
+  const [recentsOpen, setRecentsOpen] = useState(false)
+  // A pending destructive action awaiting confirmation (replacing the canvas).
+  const [confirmAction, setConfirmAction] = useState<null | { run: () => void; title: string; body: string }>(null)
+  // A brand-new document not yet written to disk (auto-save creates it on first edit).
+  const [untitled, setUntitled] = useState(false)
 
   // Client-only environment detection on mount. Must run post-hydration (the
   // static export prerenders with no window), so setState-in-effect is intended.
   useEffect(() => {
     const d = getDesktop()
-    /* eslint-disable react-hooks/set-state-in-effect */
     setDesktop(d)
     setFsaSupported(!!d || (typeof window !== 'undefined' && 'showSaveFilePicker' in window))
-    /* eslint-enable react-hooks/set-state-in-effect */
   }, [])
 
   // Write the current canvas to the linked file. Auto-save calls this with
@@ -162,6 +207,7 @@ export function AutoSave({ syntax }: { syntax: string }) {
       diskRef.current = md // disk now holds exactly this
       setDirty(false)
       setStatus('saved')
+      setUntitled(false) // the file now exists on disk — no longer an unsaved new doc
     } catch {
       setStatus('error')
     }
@@ -194,16 +240,11 @@ export function AutoSave({ syntax }: { syntax: string }) {
           // The .md on disk is the canonical artifact. Always lay it out with
           // Mermaid's engine so the canvas opens as the clean, crossing-free
           // flow you see in the Mermaid Live preview (not stale saved positions).
-          const parsed = parseDocument(fileText)
-          const opts = {
-            direction: parsed.direction,
-            theme: parsed.theme,
-            look: parsed.look,
-            curveStyle: parsed.curveStyle,
-          }
-          const laidOut = await autoArrange(parsed.nodes, parsed.edges, opts)
+          // If it can't be parsed, applyDocText raises a warning instead of
+          // silently opening a blank canvas.
           if (cancelled) return
-          imp(laidOut, parsed.edges, opts)
+          await applyDocText(fileText)
+          if (cancelled) return
         } else if (sessOk) {
           imp(sess.nodes, sess.edges ?? [], sessOpts)
         }
@@ -216,6 +257,7 @@ export function AutoSave({ syntax }: { syntax: string }) {
       const path = await d.getSavePath()
       setName(baseName(path))
       linkedRef.current = true
+      try { setRecents(await d.getRecents()) } catch { /* ignore */ }
       // Do NOT write here — restoring/opening must never overwrite the file.
       // Auto-save kicks in only once the canvas actually changes.
     })()
@@ -233,7 +275,14 @@ export function AutoSave({ syntax }: { syntax: string }) {
     const unsub = d.onFileChanged(async (content) => {
       if (!content || !content.trim()) return
       const parsed = parseDocument(content)
-      if (parsed.error || parsed.nodes.length === 0) return
+      if (parsed.error || parsed.nodes.length === 0) {
+        // An external edit (an agent/editor) made the file unreadable. Keep the
+        // current canvas but warn, with the raw text ready to Copy-for-LLM.
+        useFlowStore.getState().setLoadError({ message: parsed.error ?? NO_DIAGRAM_MSG, content })
+        return
+      }
+      // Parse succeeded — clear any earlier "file couldn't be read" warning.
+      useFlowStore.getState().setLoadError(null)
       const opts = {
         direction: parsed.direction,
         theme: parsed.theme,
@@ -267,17 +316,17 @@ export function AutoSave({ syntax }: { syntax: string }) {
 
   }, [syntax])
 
-  // Parse a .md and lay it out onto the canvas (used by Open).
+  // Parse a .md and lay it out onto the canvas (used by Open). Warns via
+  // loadError instead of silently blanking the canvas when the file is corrupt.
   const loadOntoCanvas = async (text: string) => {
-    const parsed = parseDocument(text)
-    const opts = {
-      direction: parsed.direction,
-      theme: parsed.theme,
-      look: parsed.look,
-      curveStyle: parsed.curveStyle,
-    }
-    const laidOut = await autoArrange(parsed.nodes, parsed.edges, opts)
-    useFlowStore.getState().importDiagram(laidOut, parsed.edges, opts)
+    await applyDocText(text)
+  }
+
+  // Pull the recent-files list from the desktop bridge (no-op in the browser).
+  const refreshRecents = async () => {
+    const d = getDesktop()
+    if (!d?.getRecents) return
+    try { setRecents(await d.getRecents()) } catch { /* ignore */ }
   }
 
   // Open an existing .md and load it onto the canvas; auto-save then tracks it.
@@ -288,10 +337,12 @@ export function AutoSave({ syntax }: { syntax: string }) {
       if (!res) return // cancelled
       await loadOntoCanvas(res.content ?? '') // replace canvas (blank if file empty)
       setName(baseName(res.path))
+      setUntitled(false)
       linkedRef.current = true
       diskRef.current = currentSyntax() // canvas now matches the file — never write on open
       setDirty(false)
       setStatus('saved')
+      refreshRecents()
       return
     }
     if (!fsaSupported) return
@@ -323,8 +374,10 @@ export function AutoSave({ syntax }: { syntax: string }) {
       const path = await d.saveAs()
       if (!path) return // cancelled
       setName(baseName(path))
+      setUntitled(false)
       linkedRef.current = true
       await write(true) // explicit save to the chosen file
+      refreshRecents()
       return
     }
     if (!fsaSupported) return
@@ -357,13 +410,70 @@ export function AutoSave({ syntax }: { syntax: string }) {
     await write(true)
   }
 
+  const BLANK = { direction: 'TD', theme: 'default', look: 'classic', curveStyle: 'basis' } as const
+
+  // Start a fresh, blank document. On desktop this links a new untitled .md (not
+  // written until you add something); in the browser it just unlinks and clears.
+  const newDoc = async () => {
+    const d = getDesktop()
+    useFlowStore.getState().setLoadError(null)
+    useFlowStore.getState().importDiagram([], [], BLANK)
+    if (d) {
+      const path = await d.newFile()
+      setName(path ? baseName(path) : null)
+      setUntitled(true)
+      linkedRef.current = true
+      diskRef.current = currentSyntax()
+      setDirty(false)
+      setStatus('idle')
+      refreshRecents()
+      return
+    }
+    handleRef.current = null
+    setName(null)
+    setUntitled(true)
+    linkedRef.current = false
+    diskRef.current = null
+    setDirty(false)
+    setStatus('idle')
+  }
+
+  // Open a file straight from the recent-files list (desktop only, no dialog).
+  const openRecent = async (p: string) => {
+    const d = getDesktop()
+    if (!d?.openPath) return
+    setRecentsOpen(false)
+    const res = await d.openPath(p)
+    if (!res) { refreshRecents(); return } // file gone — main prunes it
+    await loadOntoCanvas(res.content ?? '')
+    setName(baseName(res.path))
+    setUntitled(false)
+    linkedRef.current = true
+    diskRef.current = currentSyntax()
+    setDirty(false)
+    setStatus('saved')
+    refreshRecents()
+  }
+
+  // Replacing the on-screen diagram is safe (the current file is auto-saved), but
+  // confirm first when there's work on the canvas so it's never a surprise.
+  const guard = (title: string, body: string, run: () => void) => {
+    if (useFlowStore.getState().nodes.length === 0) { run(); return }
+    setConfirmAction({ title, body, run })
+  }
+  const savedTo = () => (name ? ` to “${name}”` : '')
+  const guardedNew = () => guard('Start a new diagram?', `Your current diagram is auto-saved${savedTo()}. This clears the canvas for a new file.`, newDoc)
+  const guardedOpen = () => guard('Open another file?', `Your current diagram is auto-saved${savedTo()} and will be replaced on screen.`, openExisting)
+  const guardedOpenRecent = (p: string) => { setRecentsOpen(false); guard('Open this file?', `Your current diagram is auto-saved${savedTo()} and will be replaced on screen.`, () => openRecent(p)) }
+
   // Standard keyboard shortcuts: Ctrl+S save, Ctrl+Shift+S save as, Ctrl+O open.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.ctrlKey || e.metaKey)) return
       const k = e.key.toLowerCase()
       if (k === 's') { e.preventDefault(); if (e.shiftKey) saveAs(); else saveNow() }
-      else if (k === 'o' && !e.shiftKey) { e.preventDefault(); openExisting() }
+      else if (k === 'o' && !e.shiftKey) { e.preventDefault(); guardedOpen() }
+      else if (k === 'n' && !e.shiftKey) { e.preventDefault(); guardedNew() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -378,67 +488,134 @@ export function AutoSave({ syntax }: { syntax: string }) {
     )
   }
 
+  const busy = status === 'saving' || dirty
   const dotColor =
     status === 'error' ? '#ef4444'
-      : status === 'saving' ? '#f59e0b'
-        : !name ? '#4F46E5'
-          : dirty ? '#f59e0b' // unsaved changes
-            : '#10b981' // saved / clean
-  const label = !name ? 'Auto-save' : status === 'saving' ? 'Saving…' : status === 'error' ? 'Save failed' : name
+      : busy ? '#f59e0b'
+        : untitled ? '#4F46E5'
+          : '#10b981' // saved / clean
+  const stateHint =
+    status === 'error' ? 'Save failed'
+      : busy ? 'Auto-saving…'
+        : untitled ? 'New — add to save'
+          : 'Auto-saved'
+
+  const fileBtn: React.CSSProperties = {
+    background: NEU_BG, border: 'none', borderRadius: 12, boxShadow: 'var(--neu-shadow-raised)',
+    width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center',
+    cursor: 'pointer', color: '#6B7280', flexShrink: 0,
+  }
+  const hasRecents = !!desktop && recents.length > 0
 
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-      {/* Open an existing .md file */}
-      <button
-        onClick={openExisting}
-        title="Open a .md file (Ctrl+O)"
-        aria-label="Open a .md file"
-        style={{
-          background: NEU_BG,
-          border: 'none',
-          borderRadius: 12,
-          boxShadow: 'var(--neu-shadow-raised)',
-          width: 36,
-          height: 36,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          cursor: 'pointer',
-          color: '#6B7280',
-          flexShrink: 0,
-        }}
-      >
+      {/* New blank document */}
+      <button onClick={guardedNew} title="New diagram (Ctrl+N)" aria-label="New diagram" style={fileBtn}>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1" />
-          <path d="M3 9h16.5a1 1 0 0 1 .97 1.243l-1.5 6A1 1 0 0 1 18 17H4a1 1 0 0 1-1-1V9Z" />
+          <path d="M14 3v4a1 1 0 0 0 1 1h4" />
+          <path d="M17 21H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v11a2 2 0 0 1-2 2z" />
+          <line x1="12" y1="11" x2="12" y2="17" />
+          <line x1="9" y1="14" x2="15" y2="14" />
         </svg>
       </button>
 
-      {/* Save-status pill — shows the current auto-save file; click to Save As */}
-      <button
-        onClick={saveAs}
-        title={name ? `${dirty ? 'Unsaved changes' : 'Saved'} — ${name}\nCtrl+S to save now · click for Save As (Ctrl+Shift+S)` : 'Save As — choose a file for your .md'}
-        aria-label={name ? `${dirty ? 'Unsaved changes' : 'Saved'}, ${name}. Save As` : 'Save As'}
+      {/* Open + recent files */}
+      <span style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <button
+          onClick={guardedOpen}
+          title="Open a .md file (Ctrl+O)"
+          aria-label="Open a .md file"
+          style={{ ...fileBtn, ...(hasRecents ? { borderTopRightRadius: 4, borderBottomRightRadius: 4 } : {}) }}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 7a2 2 0 0 1 2-2h4l2 2h6a2 2 0 0 1 2 2v1" />
+            <path d="M3 9h16.5a1 1 0 0 1 .97 1.243l-1.5 6A1 1 0 0 1 18 17H4a1 1 0 0 1-1-1V9Z" />
+          </svg>
+        </button>
+        {hasRecents && (
+          <button
+            onClick={() => { setRecentsOpen((v) => !v); refreshRecents() }}
+            title="Recent files"
+            aria-label="Recent files"
+            aria-haspopup="menu"
+            aria-expanded={recentsOpen}
+            style={{ ...fileBtn, width: 22, marginLeft: 2, borderTopLeftRadius: 4, borderBottomLeftRadius: 4, fontSize: 10 }}
+          >
+            ▾
+          </button>
+        )}
+        {recentsOpen && hasRecents && (
+          <>
+            <div onClick={() => setRecentsOpen(false)} style={{ position: 'fixed', inset: 0, zIndex: 40 }} />
+            <div
+              role="menu"
+              aria-label="Recent files"
+              style={{ position: 'absolute', top: 'calc(100% + 6px)', right: 0, zIndex: 41, background: '#fff', borderRadius: 12, boxShadow: '0 10px 28px rgba(0,0,0,0.18)', border: '1px solid #eee', padding: 6, minWidth: 250, maxWidth: 360 }}
+            >
+              <div style={{ fontSize: 10, fontWeight: 700, textTransform: 'uppercase', letterSpacing: '.04em', color: '#9ca3af', padding: '4px 8px' }}>Recent files</div>
+              {recents.map((p) => (
+                <button
+                  key={p}
+                  role="menuitem"
+                  onClick={() => guardedOpenRecent(p)}
+                  title={p}
+                  style={{ display: 'block', width: '100%', textAlign: 'left', background: 'transparent', border: 'none', borderRadius: 8, padding: '6px 8px', cursor: 'pointer' }}
+                  onMouseEnter={(e) => (e.currentTarget.style.background = '#f3f4f6')}
+                  onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 12, color: '#374151', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{baseName(p)}</div>
+                  <div style={{ fontSize: 10, color: '#9ca3af', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', direction: 'rtl', textAlign: 'left' }}>{p}</div>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+      </span>
+
+      {/* Save As — fork the diagram to a new file */}
+      <button onClick={saveAs} title="Save As — save to a new file (Ctrl+Shift+S)" aria-label="Save As" style={fileBtn}>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z" />
+          <polyline points="17 21 17 13 7 13 7 21" />
+          <polyline points="7 3 7 8 15 8" />
+        </svg>
+      </button>
+
+      {/* Auto-save status — NOT a button; every change saves to this file. */}
+      <span
+        title={name
+          ? `Auto-saving to ${name}${untitled ? ' (new file — created on your first change)' : ''}. Every change is saved automatically.`
+          : 'No file linked. Use Save As to choose where your .md is saved.'}
+        aria-label={`${name ?? 'Untitled'}, ${stateHint}`}
         style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 7,
-          background: NEU_BG,
-          border: 'none',
-          borderRadius: 50,
-          boxShadow: name ? 'var(--neu-shadow-inset)' : 'var(--neu-shadow-raised)',
-          padding: '7px 12px',
-          cursor: 'pointer',
-          fontSize: 12,
-          fontWeight: 600,
-          color: name ? '#4b5563' : '#4F46E5',
-          maxWidth: 190,
-          flexShrink: 0,
+          display: 'flex', alignItems: 'center', gap: 7, background: NEU_BG, borderRadius: 50,
+          boxShadow: 'var(--neu-shadow-inset)', padding: '5px 12px', fontSize: 12, fontWeight: 600,
+          color: '#4b5563', maxWidth: 210, flexShrink: 0, userSelect: 'none',
         }}
       >
         <span style={{ width: 8, height: 8, borderRadius: '50%', background: dotColor, flexShrink: 0 }} />
-        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</span>
-      </button>
+        <span style={{ display: 'flex', flexDirection: 'column', lineHeight: 1.15, overflow: 'hidden' }}>
+          <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{name ?? 'Untitled'}</span>
+          <span style={{ fontSize: 9, fontWeight: 600, color: '#9ca3af', whiteSpace: 'nowrap' }}>{stateHint}</span>
+        </span>
+      </span>
+
+      {/* Confirm before replacing the on-screen diagram (work is already saved). */}
+      {confirmAction && (
+        <div
+          className="fixed inset-0 z-[150] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          onClick={(e) => { if (e.target === e.currentTarget) setConfirmAction(null) }}
+        >
+          <div role="dialog" aria-modal="true" aria-label={confirmAction.title} style={{ background: '#fff', borderRadius: 16, boxShadow: '0 12px 40px rgba(0,0,0,0.25)', width: 400, padding: 20 }}>
+            <div style={{ fontSize: 14, fontWeight: 600, color: '#111827' }}>{confirmAction.title}</div>
+            <div style={{ fontSize: 12, color: '#6b7280', marginTop: 6, lineHeight: 1.5 }}>{confirmAction.body}</div>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 18 }}>
+              <button onClick={() => setConfirmAction(null)} style={{ padding: '6px 14px', fontSize: 12, fontWeight: 500, color: '#4b5563', background: 'transparent', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Cancel</button>
+              <button onClick={() => { const a = confirmAction; setConfirmAction(null); a.run() }} style={{ padding: '6px 14px', fontSize: 12, fontWeight: 600, color: '#fff', background: '#4F46E5', border: 'none', borderRadius: 8, cursor: 'pointer' }}>Continue</button>
+            </div>
+          </div>
+        </div>
+      )}
     </span>
   )
 }

@@ -30,18 +30,28 @@ function dimsOf(n: Node<FlowNodeData>, defW: number, defH: number) {
   return { w, h }
 }
 
+// Absolute position, walking the WHOLE parent chain. Hopping a single level is
+// wrong as soon as anything nests — a note attached to a node that itself sits
+// in a group, say — and the error is exactly what used to fling a re-parented
+// note off across the canvas.
+function absPos(n: Node<FlowNodeData>, all: Node<FlowNodeData>[]) {
+  let x = n.position.x
+  let y = n.position.y
+  const seen = new Set<string>([n.id])
+  let p = n.parentId ? all.find((m) => m.id === n.parentId) : undefined
+  while (p && !seen.has(p.id)) {
+    seen.add(p.id)
+    x += p.position.x
+    y += p.position.y
+    p = p.parentId ? all.find((m) => m.id === p!.parentId) : undefined
+  }
+  return { x, y }
+}
+
 // Absolute center of a node, resolving a parent-relative position if needed.
 function absCenter(n: Node<FlowNodeData>, all: Node<FlowNodeData>[]) {
   const { w, h } = dimsOf(n, 150, 60)
-  let x = n.position.x
-  let y = n.position.y
-  if (n.parentId) {
-    const p = all.find((m) => m.id === n.parentId)
-    if (p) {
-      x += p.position.x
-      y += p.position.y
-    }
-  }
+  const { x, y } = absPos(n, all)
   return { cx: x + w / 2, cy: y + h / 2 }
 }
 
@@ -57,7 +67,8 @@ function groupAt(
   for (const sg of all) {
     if (!sg.data.isSubgraph || sg.id === excludeId) continue
     const { w, h } = dimsOf(sg, 320, 220)
-    if (cx >= sg.position.x && cx <= sg.position.x + w && cy >= sg.position.y && cy <= sg.position.y + h) {
+    const { x, y } = absPos(sg, all)
+    if (cx >= x && cx <= x + w && cy >= y && cy <= y + h) {
       const area = w * h
       if (!best || area < best.area) best = { id: sg.id, area }
     }
@@ -68,15 +79,7 @@ function groupAt(
 // Absolute bounds of a node, resolving a parent-relative position.
 function absBounds(n: Node<FlowNodeData>, all: Node<FlowNodeData>[]) {
   const { w, h } = dimsOf(n, 150, 60)
-  let x = n.position.x
-  let y = n.position.y
-  if (n.parentId) {
-    const p = all.find((m) => m.id === n.parentId)
-    if (p) {
-      x += p.position.x
-      y += p.position.y
-    }
-  }
+  const { x, y } = absPos(n, all)
   return { x, y, w, h }
 }
 
@@ -102,6 +105,30 @@ function nodeOverlapping(
   return best?.id ?? null
 }
 
+// The group a sticky note overlaps — the same "just touch it" rule that attaches
+// a note to a box, so the two feel identical. Membership by *containment* still
+// applies separately (groupAt); this is what lets a note hang off a group's edge
+// and still belong to it. Smallest group wins, matching groupAt.
+function groupOverlapping(
+  all: Node<FlowNodeData>[],
+  note: Node<FlowNodeData>,
+  excludeId: string,
+): string | null {
+  const a = absBounds(note, all)
+  let best: { id: string; area: number } | null = null
+  for (const sg of all) {
+    if (sg.id === excludeId || !sg.data.isSubgraph) continue
+    const b = absBounds(sg, all)
+    const ix = Math.min(a.x + a.w, b.x + b.w) - Math.max(a.x, b.x)
+    const iy = Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y)
+    if (ix > 0 && iy > 0) {
+      const size = b.w * b.h
+      if (!best || size < best.area) best = { id: sg.id, area: size }
+    }
+  }
+  return best?.id ?? null
+}
+
 interface CanvasInnerProps {
   onOpenPalette?: () => void
 }
@@ -109,14 +136,15 @@ interface CanvasInnerProps {
 function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
   const {
     nodes, edges,
-    onNodesChange, onEdgesChange, onConnect,
+    onNodesChange, onEdgesChange, onConnect, reconnectEdge,
     addNode, addNodeAtPosition,
     addNote, addTable, addSubgraph, addEntity,
     undo, redo, duplicateSelected, copySelected, pasteClipboard,
-    pushHistory, assignToSubgraph,
+    pushHistory, assignToSubgraph, fitGroups,
     drawingShape, setDrawingShape,
     setDropTargetId, setSpawnCenter,
     activeBlock, setActiveBlock,
+    docEpoch,
   } = useFlowStore()
   const { screenToFlowPosition, fitView } = useReactFlow()
 
@@ -374,8 +402,11 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
       const cur = draggedNode.parentId ?? null
       let next: string | null = null
       if (draggedNode.data.isNote) {
-        // A note prefers attaching to a node it overlaps; else joining a group.
-        const host = nodeOverlapping(all, draggedNode, draggedNode.id)
+        // A note prefers attaching to a node it overlaps, then to a group it
+        // overlaps, then to one it's simply sitting inside.
+        const host =
+          nodeOverlapping(all, draggedNode, draggedNode.id) ??
+          groupOverlapping(all, draggedNode, draggedNode.id)
         const target = host ?? groupAt(all, cx, cy, draggedNode.id)
         next = target && target !== cur ? target : null
       } else {
@@ -413,7 +444,9 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
       // A sticky note dropped over a node attaches to it (becomes its child and
       // moves with it). Dropped elsewhere, it falls through to group handling.
       if (draggedNode.data.isNote) {
-        const host = nodeOverlapping(all, draggedNode, draggedNode.id)
+        const host =
+          nodeOverlapping(all, draggedNode, draggedNode.id) ??
+          groupOverlapping(all, draggedNode, draggedNode.id)
         if (host) {
           if (host !== (draggedNode.parentId ?? null)) assignToSubgraph([draggedNode.id], host)
           return
@@ -425,10 +458,13 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
       const target = groupAt(all, cx, cy, draggedNode.id)
       const current = draggedNode.parentId ?? null
       if (target !== current) {
-        assignToSubgraph([draggedNode.id], target)
+        assignToSubgraph([draggedNode.id], target) // also grows the target group
+      } else if (current) {
+        // Moved within the same group — grow it so the node still fits (no spill).
+        fitGroups()
       }
     },
-    [pushHistory, assignToSubgraph, setDropTargetId]
+    [pushHistory, assignToSubgraph, fitGroups, setDropTargetId]
   )
 
   const previewRect =
@@ -458,10 +494,21 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
   // is the flowchart block. Edges are ER when both ends are entities.
   const entityIds = new Set(nodes.filter((n) => n.data?.isEntity).map((n) => n.id))
   const erIds = erNodeIds(nodes)
+  // Which blocks actually have content. A single-block file (only flow OR only
+  // ER) must never render a blank view, so the chosen block falls back to one
+  // that exists — and the All/Flow/ER switcher only appears when there's a real
+  // choice (both blocks present).
+  const hasEr = nodes.some((n) => erIds.has(n.id))
+  const hasFlow = nodes.some((n) => !erIds.has(n.id))
+  const effectiveBlock =
+    activeBlock === 'er' && !hasEr ? (hasFlow ? 'flow' : 'all')
+      : activeBlock === 'flow' && !hasFlow ? (hasEr ? 'er' : 'all')
+        : activeBlock
+  const showSwitcher = hasEr && hasFlow
   const viewBase =
-    activeBlock === 'all'
+    effectiveBlock === 'all'
       ? nodes
-      : activeBlock === 'er'
+      : effectiveBlock === 'er'
         ? nodes.filter((n) => erIds.has(n.id))
         : nodes.filter((n) => !erIds.has(n.id))
   // Make group wrappers click-through so a drag over their empty interior pans /
@@ -471,17 +518,26 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
     n.data?.isSubgraph ? { ...n, style: { ...n.style, pointerEvents: 'none' as const } } : n,
   )
   const viewEdges =
-    activeBlock === 'all'
+    effectiveBlock === 'all'
       ? edges
-      : activeBlock === 'er'
+      : effectiveBlock === 'er'
         ? edges.filter((e) => entityIds.has(e.source) && entityIds.has(e.target))
         : edges.filter((e) => !entityIds.has(e.source) && !entityIds.has(e.target))
 
-  // Re-frame when the active block changes.
+  // Re-frame when the visible block changes — and whenever a whole document
+  // replaces the canvas (open / import / new). Without the second trigger a
+  // freshly-opened file inherits the previous diagram's viewport and can land
+  // completely off-screen, so it looks like nothing happened until you go
+  // hunting for it. Two frames of delay lets the new nodes measure first, so
+  // fitView frames their real sizes rather than zero-height placeholders.
   useEffect(() => {
-    const t = setTimeout(() => fitView({ duration: 300, padding: 0.15 }), 60)
+    const t = setTimeout(() => {
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => fitView({ duration: 300, padding: 0.15 })),
+      )
+    }, 60)
     return () => clearTimeout(t)
-  }, [activeBlock, fitView])
+  }, [effectiveBlock, docEpoch, fitView])
 
   return (
     <div
@@ -502,8 +558,17 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onConnect={onConnect}
+        onReconnect={reconnectEdge}
+        reconnectRadius={26}
         connectionMode={ConnectionMode.Loose}
         zoomOnDoubleClick={false}
+        // Once you've picked something out of a pile, it comes to the front and
+        // stays the thing you're clicking — which is the only practical way to
+        // work with lines that all run on top of each other. (Safe for labels
+        // now: FlowEdge masks a gap in the line rather than relying on the label
+        // layer painting over it.)
+        elevateEdgesOnSelect
+        elevateNodesOnSelect
         onNodeDrag={handleNodeDrag}
         onNodeDragStop={handleNodeDragStop}
         onMoveEnd={updateSpawnCenter}
@@ -520,43 +585,47 @@ function CanvasInner({ onOpenPalette }: CanvasInnerProps) {
         <Background variant={BackgroundVariant.Dots} gap={24} size={2} color="#d1d9e6" />
       </ReactFlow>
 
-      {/* Block view switcher — always available, floats top-left (kept out of the
-          toolbar so it never crowds the file controls). */}
-      <div
-        style={{
-          position: 'absolute',
-          top: 16,
-          left: 16,
-          display: 'flex',
-          gap: 2,
-          background: 'var(--neu-bg)',
-          borderRadius: 50,
-          boxShadow: 'var(--neu-shadow-raised)',
-          padding: 4,
-          zIndex: 15,
-        }}
-        title="Show one diagram block at a time"
-      >
-        {([['all', 'All'], ['flow', 'Flow'], ['er', 'ER']] as const).map(([val, lbl]) => (
-          <button
-            key={val}
-            onClick={() => setActiveBlock(val)}
-            aria-label={`Show ${lbl}`}
-            style={{
-              border: 'none',
-              borderRadius: 50,
-              padding: '4px 12px',
-              fontSize: 11,
-              fontWeight: 600,
-              cursor: 'pointer',
-              background: activeBlock === val ? '#4F46E5' : 'transparent',
-              color: activeBlock === val ? '#fff' : '#6B7280',
-            }}
-          >
-            {lbl}
-          </button>
-        ))}
-      </div>
+      {/* Block view switcher — floats top-left, kept out of the toolbar so it
+          never crowds the file controls. Only shown when the file actually has
+          both a flowchart and an ER block (otherwise there's nothing to switch
+          between, and a wrong choice would blank the canvas). */}
+      {showSwitcher && (
+        <div
+          style={{
+            position: 'absolute',
+            top: 16,
+            left: 16,
+            display: 'flex',
+            gap: 2,
+            background: 'var(--neu-bg)',
+            borderRadius: 50,
+            boxShadow: 'var(--neu-shadow-raised)',
+            padding: 4,
+            zIndex: 15,
+          }}
+          title="Show one diagram block at a time"
+        >
+          {([['all', 'All'], ['flow', 'Flow'], ['er', 'ER']] as const).map(([val, lbl]) => (
+            <button
+              key={val}
+              onClick={() => setActiveBlock(val)}
+              aria-label={`Show ${lbl}`}
+              style={{
+                border: 'none',
+                borderRadius: 50,
+                padding: '4px 12px',
+                fontSize: 11,
+                fontWeight: 600,
+                cursor: 'pointer',
+                background: effectiveBlock === val ? '#4F46E5' : 'transparent',
+                color: effectiveBlock === val ? '#fff' : '#6B7280',
+              }}
+            >
+              {lbl}
+            </button>
+          ))}
+        </div>
+      )}
 
       <EdgeMarkerDefs />
 

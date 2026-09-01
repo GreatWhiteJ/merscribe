@@ -275,11 +275,21 @@ export function serializeErd(
   }
 
   const byId = new Map(entities.map((n) => [n.id, n]))
-  const fieldName = (node: Node<FlowNodeData> | undefined, handle?: string | null): string | null => {
-    if (!node || !handle) return null
-    const m = /^f-(\d+)-/.exec(handle)
-    if (!m) return null
-    return node.data.fields?.[+m[1]]?.name ?? null
+  // The FK/PK row a relationship end ties to — from the connection handle when
+  // drawn on the canvas, else from the edge's stored field index (which survives
+  // a parse→serialize round-trip after the handle is gone).
+  const fieldName = (
+    node: Node<FlowNodeData> | undefined,
+    handle?: string | null,
+    index?: number,
+  ): string | null => {
+    if (!node) return null
+    let i: number | undefined
+    const m = handle ? /^f-(\d+)-/.exec(handle) : null
+    if (m) i = +m[1]
+    else if (typeof index === 'number') i = index
+    if (i == null) return null
+    return node.data.fields?.[i]?.name ?? null
   }
 
   for (const e of edges) {
@@ -295,8 +305,8 @@ export function serializeErd(
     // PK→FK linkage into the label so it survives in the Mermaid text.
     let label = raw
     if (!label) {
-      const src = fieldName(byId.get(e.source), e.sourceHandle)
-      const tgt = fieldName(byId.get(e.target), e.targetHandle)
+      const src = fieldName(byId.get(e.source), e.sourceHandle, e.data?.sourceFieldIndex)
+      const tgt = fieldName(byId.get(e.target), e.targetHandle, e.data?.targetFieldIndex)
       label = src && tgt ? `${src} → ${tgt}` : 'relates'
     }
     lines.push(`  ${a} ${card} ${b} : "${label.replace(/"/g, "'")}"`)

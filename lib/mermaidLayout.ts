@@ -1,7 +1,7 @@
 import mermaid from 'mermaid'
 import dagre from '@dagrejs/dagre'
 import type { Edge, Node } from '@xyflow/react'
-import type { CurveStyle, Direction, FlowEdgeData, FlowNodeData, Look, Theme } from './store'
+import { entityFitHeight, type CurveStyle, type Direction, type FlowEdgeData, type FlowNodeData, type Look, type Theme } from './store'
 import { serializeDocument, extractMermaidBlocks } from './serializer'
 import { erNodeIds } from './blocks'
 
@@ -15,6 +15,10 @@ let initialized = false
 let counter = 0
 
 const RANKDIR: Record<Direction, string> = { TD: 'TB', LR: 'LR', BT: 'BT', RL: 'RL' }
+
+// Widest an auto-fitted note gets before its text wraps: a readable column, not
+// the whole canvas. Hand-resized notes ignore this entirely.
+const NOTE_MAX_AUTO_W = 420
 
 interface Size { w: number; h: number }
 interface Settings { direction: Direction; theme: Theme; look: Look; curveStyle: CurveStyle }
@@ -65,17 +69,22 @@ function realSize(n: Node<FlowNodeData>, measured?: Size): Size {
   }
   if (d?.isEntity) {
     const fields = d.fields?.length ?? 0
-    return { w: 220, h: 30 + fields * 26 + 24 }
+    return { w: 220, h: entityFitHeight(fields) }
   }
   if (d?.isNote) {
-    // Grow with content (longest line → width, wrapped lines → height) but
-    // stay within sane bounds so a long note doesn't take over the canvas.
+    // A note the user sized by hand keeps exactly that size: auto-arrange
+    // re-positions it but never re-fits it, so a note dragged out to hold a
+    // whole document doesn't collapse back into a sticky.
+    if (d.userSized) return dimOf(n)
+    // Otherwise grow with the content. The width settles into a readable column
+    // and the height fits every wrapped line, uncapped: a long note is a long
+    // note, and scrolling a tiny box to read it is worse than a tall one.
     const lines = (d.label ?? '').split('\n')
     const longest = lines.reduce((m, l) => Math.max(m, l.length), 1)
-    const w = Math.min(280, Math.max(180, longest * 7 + 28))
+    const w = Math.min(NOTE_MAX_AUTO_W, Math.max(200, longest * 7 + 28))
     const perLine = Math.max(12, Math.floor((w - 24) / 7))
     const rows = lines.reduce((a, l) => a + Math.max(1, Math.ceil(l.length / perLine)), 0)
-    const h = Math.min(210, Math.max(64, 16 + rows * 20))
+    const h = Math.max(64, 16 + rows * 20)
     return { w, h }
   }
   return measured ?? { w: 150, h: 54 }
@@ -168,11 +177,11 @@ export async function autoArrange(
   // Lay out one disconnected group (flowchart OR ER) on its own, so the two
   // blocks don't inflate each other's spacing. Returns the positioned nodes and
   // the group's overall height (for stacking). `dense` tightens the ER block.
-  const layoutGroup = (group: Node<FlowNodeData>[], dense: boolean, cluster?: Map<string, string>): { positioned: Node<FlowNodeData>[]; height: number } => {
+  const layoutGroup = (group: Node<FlowNodeData>[], dense: boolean, cluster?: Map<string, string>, rankdir?: string): { positioned: Node<FlowNodeData>[]; height: number } => {
     if (group.length === 0) return { positioned: [], height: 0 }
     const g = new dagre.graphlib.Graph({ compound: true })
     g.setGraph({
-      rankdir: RANKDIR[settings.direction],
+      rankdir: rankdir ?? RANKDIR[settings.direction],
       nodesep: dense ? 36 : 55,
       ranksep: dense ? 64 : 60,
       marginx: 12,
@@ -196,7 +205,16 @@ export async function autoArrange(
       if (n.parentId && ids.has(n.parentId)) g.setParent(n.id, n.parentId)
       else if (cluster?.has(n.id)) g.setParent(n.id, cluster.get(n.id)!)
     }
-    for (const e of edges) if (ids.has(e.source) && ids.has(e.target) && g.hasNode(e.source) && g.hasNode(e.target)) g.setEdge(e.source, e.target)
+    // Same rule as lib/layout.ts: an edge touching a subgraph is undrawable by
+    // dagre (it can't rank a cluster) and used to take the whole layout down
+    // with it — the try/catch below would then leave every node unpositioned.
+    const clusters = new Set(group.filter((n) => n.data?.isSubgraph).map((n) => n.id))
+    for (const e of edges) {
+      if (!ids.has(e.source) || !ids.has(e.target)) continue
+      if (!g.hasNode(e.source) || !g.hasNode(e.target)) continue
+      if (clusters.has(e.source) || clusters.has(e.target)) continue
+      g.setEdge(e.source, e.target)
+    }
 
     try { dagre.layout(g) } catch { return { positioned: group, height: 0 } }
 
@@ -220,8 +238,9 @@ export async function autoArrange(
         const pl = g.node(n.parentId)
         if (pl) pos = { x: pos.x - (pl.x - pl.width / 2), y: pos.y - (pl.y - pl.height / 2) }
       }
-      if (n.data?.isNote) {
-        // Notes set width only; height fits the content (measured by the canvas).
+      if (n.data?.isNote && !n.data?.userSized) {
+        // Auto-fitted notes set width only; height fits the content (measured by
+        // the canvas). Hand-sized notes fall through and keep their exact box.
         return { ...n, position: pos, width: s.w, height: undefined, style: { ...n.style, width: s.w, height: undefined } }
       }
       return { ...n, position: pos, width: s.w, height: s.h, style: { ...n.style, width: s.w, height: s.h } }
@@ -248,7 +267,9 @@ export async function autoArrange(
 
   const erIds = erNodeIds(nodes)
   const flowRes = layoutGroup(structural.filter((n) => !erIds.has(n.id)), false)
-  const erRes = layoutGroup(structural.filter((n) => erIds.has(n.id)), true, erCluster.size ? erCluster : undefined)
+  // ER entities lay out left-to-right so related entities sit side by side and
+  // their field-level relationships attach on the facing sides (not stacked).
+  const erRes = layoutGroup(structural.filter((n) => erIds.has(n.id)), true, erCluster.size ? erCluster : undefined, 'LR')
   // Stack the ER block below the flowchart so the combined view reads as two
   // zones (the block switcher shows them one at a time).
   const offset = flowRes.height > 0 && erRes.positioned.length > 0 ? flowRes.height + 100 : 0

@@ -68,17 +68,10 @@ export const THEMES: { value: Theme; label: string }[] = [
   { value: 'base',    label: 'Base' },
 ]
 
+// The three edge routings offered in the UI. (The CurveStyle type keeps the
+// other D3 curve values so older .md files still parse, but they're not listed.)
 export const CURVE_STYLES: { value: CurveStyle; label: string }[] = [
-  { value: 'basis',      label: 'Curved (basis)' },
-  { value: 'linear',     label: 'Straight (linear)' },
-  { value: 'step',       label: 'Right-angle (step)' },
-  { value: 'cardinal',   label: 'Cardinal' },
-  { value: 'catmullRom', label: 'Catmull-Rom' },
-  { value: 'stepAfter',  label: 'Right-angle after' },
-  { value: 'stepBefore', label: 'Right-angle before' },
-  { value: 'natural',    label: 'Natural' },
-  { value: 'monotoneX',  label: 'Monotone X' },
-  { value: 'monotoneY',  label: 'Monotone Y' },
-  { value: 'bumpX',      label: 'Bump X' },
-  { value: 'bumpY',      label: 'Bump Y' },
+  { value: 'basis',  label: 'Curved' },
+  { value: 'linear', label: 'Straight' },
+  { value: 'step',   label: 'Stepped' },
 ]

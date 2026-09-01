@@ -18,6 +18,13 @@ interface TopToolbarProps {
 
 const NEU_BG = 'var(--neu-bg)'
 
+// Embed build (jarrettwhite.com iframe): a compile-time constant, so there is
+// no hydration flash and no reliance on a query string. When on, the file
+// open/save UI (and its Ctrl+S/O/N shortcuts, which live inside <AutoSave>) is
+// dropped entirely — the demo edits freely but never writes to disk. The Copy
+// Mermaid syntax button stays, so visitors can take their diagram as text.
+const EMBED = process.env.NEXT_PUBLIC_EMBED === '1'
+
 function NeuIconBtn({
   onClick,
   disabled,
@@ -87,11 +94,22 @@ const IconPointer = () => (
   </svg>
 )
 
-const IconCube = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-    <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-    <line x1="12" y1="22.08" x2="12" y2="12" />
+// Shape picker: three flat 2-D primitives (square, circle, triangle) — the
+// diagram vocabulary itself, not an isometric box.
+const IconShapes = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2.4" y="2.6" width="8.2" height="8.2" rx="1.4" />
+    <circle cx="17.8" cy="6.7" r="4.2" />
+    <path d="M12 13.6 17.9 21.4H6.1z" />
+  </svg>
+)
+
+// Group / subgraph: a dashed container with two members corralled inside it.
+const IconGroup = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+    <rect x="2" y="4" width="20" height="16" rx="2.5" strokeDasharray="3 2.4" />
+    <rect x="5.4" y="7.6" width="6" height="5" rx="1" fill="currentColor" fillOpacity="0.16" />
+    <rect x="13.2" y="12.2" width="5.6" height="4.6" rx="1" fill="currentColor" fillOpacity="0.16" />
   </svg>
 )
 
@@ -184,15 +202,15 @@ export function TopToolbar({ inspectorOpen, onToggleInspector, onOpenPalette, sy
 
         {/* Shape picker */}
         <div ref={shapePickerRef} style={{ position: 'relative' }}>
-          <NeuIconBtn onClick={() => { setShapePickerOpen((v) => !v); setSettingsOpen(false) }} active={shapePickerOpen} title="Shape picker">
-            <IconCube />
+          <NeuIconBtn onClick={() => { setShapePickerOpen((v) => !v); setSettingsOpen(false) }} active={shapePickerOpen} title="Shapes">
+            <IconShapes />
           </NeuIconBtn>
           {shapePickerOpen && <ShapePickerPopover onClose={() => setShapePickerOpen(false)} />}
         </div>
 
         {/* Add Group — next to shape picker */}
         <NeuIconBtn onClick={() => addSubgraph()} draggable onDragStart={startDrag('group')} title="Add a group/subgraph container (click, or drag onto canvas)">
-          ⬡
+          <IconGroup />
         </NeuIconBtn>
 
         {/* Add Note — multi-line text annotation */}
@@ -262,10 +280,14 @@ export function TopToolbar({ inspectorOpen, onToggleInspector, onOpenPalette, sy
           {settingsOpen && <SettingsPopover onClose={() => setSettingsOpen(false)} />}
         </div>
 
-        <Divider />
-
-        {/* Auto-save the .md document to a file */}
-        <AutoSave syntax={syntax} />
+        {/* Auto-save the .md document to a file — omitted in the embed build,
+            which is read-only-to-disk by design. */}
+        {!EMBED && (
+          <>
+            <Divider />
+            <AutoSave syntax={syntax} />
+          </>
+        )}
       </div>
 
       {/* Draw mode hint */}

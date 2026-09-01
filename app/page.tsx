@@ -7,6 +7,8 @@ import { TopToolbar } from '@/components/TopToolbar'
 import { ZoomControls } from '@/components/ZoomControls'
 import { InspectorPanel } from '@/components/Inspector/InspectorPanel'
 import { CommandPalette } from '@/components/CommandPalette'
+import { LoadErrorModal } from '@/components/LoadErrorModal'
+import { EmbedSeed } from '@/components/EmbedSeed'
 import { useFlowStore } from '@/lib/store'
 import { serializeDocument } from '@/lib/serializer'
 
@@ -67,6 +69,12 @@ function EditorContent() {
 
       {/* Command Palette */}
       {paletteOpen && <CommandPalette onClose={() => setPaletteOpen(false)} />}
+
+      {/* Corrupt/unsupported .md warning with a Copy-for-LLM bundle */}
+      <LoadErrorModal />
+
+      {/* Embed build only: seed a default demo diagram on first load. */}
+      <EmbedSeed />
     </div>
   )
 }

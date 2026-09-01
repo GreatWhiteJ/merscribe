@@ -77,6 +77,14 @@ export interface FlowNodeData extends Record<string, unknown> {
   rows?: string[][];
   // Visual text size (px) for the object's labels/cells. Canvas-only.
   fontSize?: number;
+  // A note the user has resized by hand. Auto-arrange then leaves its width
+  // and height exactly as set instead of re-fitting it to its text, so a note
+  // you pulled out to document size never snaps back to a sticky.
+  userSized?: boolean;
+  // A note whose height the user dragged. The box stays exactly that tall and
+  // the text scrolls inside it instead of growing to fit. Cleared by "Fit to
+  // text" in the Inspector, which hands the note back to auto-height.
+  fixedHeight?: boolean;
   // Transient: an attached note placed by auto-layout that the canvas should
   // re-position against measured sizes (kitty-corner) once, then clear.
   autoPlaced?: boolean;
@@ -132,6 +140,78 @@ function orderByParent(nodes: Node<FlowNodeData>[]): Node<FlowNodeData>[] {
   return out;
 }
 
+// Best-known on-canvas size of a node: live measured size, else its explicit
+// style size, else a per-kind default.
+function nodeSize(n: Node<FlowNodeData>): { w: number; h: number } {
+  const def = n.data?.isSubgraph
+    ? { w: 320, h: 220 }
+    : n.data?.isEntity
+      ? { w: 220, h: 140 }
+      : n.data?.isTable
+        ? { w: 280, h: 160 }
+        : n.data?.isNote
+          ? { w: 220, h: 130 }
+          : { w: 150, h: 60 };
+  const w = n.measured?.width ?? (typeof n.style?.width === "number" ? n.style.width : def.w);
+  const h = n.measured?.height ?? (typeof n.style?.height === "number" ? n.style.height : def.h);
+  return { w, h };
+}
+
+// Grow a subgraph (never shrink) so it fully contains its children with padding,
+// leaving room for the title bar at the top. If a child sits above/left of the
+// group origin, the group expands in that direction and every child is shifted
+// to keep its absolute position unchanged. Idempotent once everything fits.
+const GROUP_PAD = 22;
+const GROUP_HEADER = 34;
+function growGroupToFit(
+  nodes: Node<FlowNodeData>[],
+  groupId: string,
+): Node<FlowNodeData>[] {
+  const group = nodes.find((n) => n.id === groupId);
+  if (!group || !group.data?.isSubgraph) return nodes;
+  const kids = nodes.filter((n) => n.parentId === groupId);
+  if (kids.length === 0) return nodes;
+  const cur = nodeSize(group);
+  let x0 = 0, y0 = 0, x1 = cur.w, y1 = cur.h;
+  for (const k of kids) {
+    const s = nodeSize(k);
+    x0 = Math.min(x0, k.position.x - GROUP_PAD);
+    y0 = Math.min(y0, k.position.y - GROUP_HEADER);
+    x1 = Math.max(x1, k.position.x + s.w + GROUP_PAD);
+    y1 = Math.max(y1, k.position.y + s.h + GROUP_PAD);
+  }
+  const offX = Math.min(0, x0), offY = Math.min(0, y0);
+  const newW = x1 - offX, newH = y1 - offY;
+  // Already big enough and origin unchanged → nothing to do.
+  if (offX === 0 && offY === 0 && newW <= cur.w && newH <= cur.h) return nodes;
+  return nodes.map((n) => {
+    if (n.id === groupId) {
+      return {
+        ...n,
+        position: { x: group.position.x + offX, y: group.position.y + offY },
+        width: newW,
+        height: newH,
+        style: { ...n.style, width: newW, height: newH },
+      };
+    }
+    if (n.parentId === groupId) {
+      return { ...n, position: { x: n.position.x - offX, y: n.position.y - offY } };
+    }
+    return n;
+  });
+}
+
+// Entity box geometry — must match the entity render in FlowNode (title bar +
+// fixed-height field rows + the "+ field" affordance + border). The box always
+// grows to hold every field, so a field can never spill outside the object.
+export const ENTITY_HEADER_H = 30;
+export const ENTITY_ROW_H = 26;
+const ENTITY_FOOTER_H = 22; // the "+ field" affordance
+const ENTITY_BORDER = 6;    // top+bottom border (at the selected stroke width)
+export function entityFitHeight(fieldCount: number): number {
+  return ENTITY_HEADER_H + fieldCount * ENTITY_ROW_H + ENTITY_FOOTER_H + ENTITY_BORDER;
+}
+
 // ─── Store interface ──────────────────────────────────────────────────────────
 interface FlowState {
   nodes: Node<FlowNodeData>[];
@@ -147,6 +227,8 @@ interface FlowState {
   onNodesChange: (changes: NodeChange[]) => void;
   onEdgesChange: (changes: EdgeChange[]) => void;
   onConnect: (connection: Connection) => void;
+  // Drag an existing edge's endpoint to a new node/field (React Flow reconnect).
+  reconnectEdge: (oldEdge: Edge<FlowEdgeData>, newConnection: Connection) => void;
 
   // Node operations
   addNode: (shape?: NodeShape) => void;
@@ -178,9 +260,20 @@ interface FlowState {
   // Subgraph operations
   addSubgraph: (title?: string, at?: { x: number; y: number }) => void;
   assignToSubgraph: (nodeIds: string[], subgraphId: string | null) => void;
+  // Grow every subgraph so it contains its children (called after a drag settles).
+  fitGroups: () => void;
 
   // Note operations
   addNote: (text?: string, at?: { x: number; y: number }) => void;
+  // Set a note's height to the one its text actually needs (measured on the
+  // canvas). Not undoable on its own — it would flood history with a step per
+  // keystroke; the surrounding edit is what gets recorded.
+  fitNoteHeight: (id: string, height: number) => void;
+  // Mark a note as hand-sized (see FlowNodeData.userSized).
+  markNoteSized: (id: string) => void;
+  // Pin a note's height to its current box (text scrolls inside it), or let it
+  // go back to growing with the text.
+  setNoteFixedHeight: (id: string, fixed: boolean) => void;
 
   // Entity operations (ERD)
   addEntity: (name?: string, at?: { x: number; y: number }) => void;
@@ -229,7 +322,17 @@ interface FlowState {
 
   // Group drag-and-drop highlight (transient, not persisted/serialized)
   dropTargetId: string | null;
+  // Bumped every time a whole document replaces the canvas (open / import /
+  // new). The canvas watches it so a freshly-loaded diagram is framed straight
+  // away instead of sitting off-screen until the user pans around looking for it.
+  docEpoch: number;
   setDropTargetId: (id: string | null) => void;
+
+  // Set when a linked .md fails to parse (bad/unsupported syntax) so the UI can
+  // warn instead of silently showing a blank canvas. Carries the raw file text
+  // so the user can copy it (plus the error) to an LLM to repair. Transient.
+  loadError: { message: string; content: string } | null;
+  setLoadError: (e: { message: string; content: string } | null) => void;
 
   // Flow-coords of the visible canvas center; new objects spawn here so they
   // always appear where the user is looking. Kept in sync by the Canvas.
@@ -281,7 +384,11 @@ export const useFlowStore = create<FlowState>((set, get) => {
     setActiveBlock: (b) => set({ activeBlock: b }),
 
     dropTargetId: null,
+    docEpoch: 0,
     setDropTargetId: (id) => set({ dropTargetId: id }),
+
+    loadError: null,
+    setLoadError: (e) => set({ loadError: e }),
 
     spawnCenter: { x: 300, y: 200 },
     setSpawnCenter: (p) => set({ spawnCenter: p }),
@@ -335,6 +442,14 @@ export const useFlowStore = create<FlowState>((set, get) => {
       }),
 
     onConnect: withHistory((connection) => {
+      // When connecting entity field handles (`f-<i>-s` / `f-<i>-t`), record which
+      // rows so the ER edge anchors to those fields instead of the box center.
+      const fieldOf = (h?: string | null) => {
+        const m = /^f-(\d+)-/.exec(h ?? "");
+        return m ? Number(m[1]) : undefined;
+      };
+      const sFI = fieldOf(connection.sourceHandle);
+      const tFI = fieldOf(connection.targetHandle);
       set({
         edges: addEdge(
           {
@@ -346,10 +461,39 @@ export const useFlowStore = create<FlowState>((set, get) => {
               endMarker: "arrow",
               erStart: "one",
               erEnd: "zero-many",
+              ...(sFI !== undefined ? { sourceFieldIndex: sFI } : {}),
+              ...(tFI !== undefined ? { targetFieldIndex: tFI } : {}),
             },
           },
           get().edges,
         ) as Edge<FlowEdgeData>[],
+      });
+    }),
+
+    reconnectEdge: withHistory((oldEdge, newConnection) => {
+      const fieldOf = (h?: string | null) => {
+        const m = /^f-(\d+)-/.exec(h ?? "");
+        return m ? Number(m[1]) : undefined;
+      };
+      const sFI = fieldOf(newConnection.sourceHandle);
+      const tFI = fieldOf(newConnection.targetHandle);
+      set({
+        edges: get().edges.map((e) => {
+          if (e.id !== oldEdge.id) return e;
+          const data: FlowEdgeData = { ...(e.data ?? {}) };
+          // Re-derive the ER field anchor from the handle the endpoint moved to
+          // (dropped on a non-field handle clears it).
+          if (sFI !== undefined) data.sourceFieldIndex = sFI; else delete data.sourceFieldIndex;
+          if (tFI !== undefined) data.targetFieldIndex = tFI; else delete data.targetFieldIndex;
+          return {
+            ...e,
+            source: newConnection.source,
+            target: newConnection.target,
+            sourceHandle: newConnection.sourceHandle ?? null,
+            targetHandle: newConnection.targetHandle ?? null,
+            data,
+          };
+        }) as Edge<FlowEdgeData>[],
       });
     }),
 
@@ -451,6 +595,7 @@ export const useFlowStore = create<FlowState>((set, get) => {
         theme: settings.theme,
         look: settings.look,
         curveStyle: settings.curveStyle,
+        docEpoch: get().docEpoch + 1,
       });
     }),
 
@@ -480,10 +625,42 @@ export const useFlowStore = create<FlowState>((set, get) => {
         type: "flowNode",
         position: { x: c.x - 110, y: c.y - 65 },
         data: { label: text, shape: "rectangle", isNote: true },
-        style: { width: 220, height: 130 },
+        style: { width: 220, height: 64 },
       };
       set({ nodes: [...get().nodes, newNode] });
     }),
+
+    fitNoteHeight: (id, height) => {
+      const h = Math.round(height);
+      set({
+        nodes: get().nodes.map((n) =>
+          // A note with a pinned height owns its box; don't grow it back.
+          n.id === id && !n.data.fixedHeight && (n.height ?? 0) !== h
+            ? { ...n, height: h, style: { ...n.style, height: h } }
+            : n,
+        ),
+      });
+    },
+
+    markNoteSized: (id) => {
+      set({
+        nodes: get().nodes.map((n) =>
+          n.id === id && !n.data.userSized
+            ? { ...n, data: { ...n.data, userSized: true } }
+            : n,
+        ),
+      });
+    },
+
+    setNoteFixedHeight: (id, fixed) => {
+      set({
+        nodes: get().nodes.map((n) =>
+          n.id === id && !!n.data.fixedHeight !== fixed
+            ? { ...n, data: { ...n.data, fixedHeight: fixed || undefined } }
+            : n,
+        ),
+      });
+    },
 
     addEntity: withHistory((name = "Entity", at?: { x: number; y: number }) => {
       const id = `ent_${nodeCounter++}`;
@@ -503,24 +680,20 @@ export const useFlowStore = create<FlowState>((set, get) => {
             { name: "name", type: "string", key: "" },
           ],
         },
-        style: { width: 220, height: 140 },
+        style: { width: 220, height: entityFitHeight(2) },
       };
       set({ nodes: [...get().nodes, newNode] });
     }),
 
     addEntityField: withHistory((id) => {
       set({
-        nodes: get().nodes.map((n) =>
-          n.id === id && n.data.isEntity
-            ? {
-                ...n,
-                data: {
-                  ...n.data,
-                  fields: [...(n.data.fields ?? []), { name: "field", type: "string", key: "" }],
-                },
-              }
-            : n,
-        ),
+        nodes: get().nodes.map((n) => {
+          if (n.id !== id || !n.data.isEntity) return n;
+          const fields: EntityField[] = [...(n.data.fields ?? []), { name: "field", type: "string", key: "" }];
+          // Grow the box to fit the new field so nothing spills.
+          const h = entityFitHeight(fields.length);
+          return { ...n, height: h, style: { ...n.style, height: h }, data: { ...n.data, fields } };
+        }),
       });
     }),
 
@@ -541,7 +714,9 @@ export const useFlowStore = create<FlowState>((set, get) => {
         nodes: get().nodes.map((n) => {
           if (n.id !== id || !n.data.isEntity) return n;
           const fields = (n.data.fields ?? []).filter((_, i) => i !== index);
-          return { ...n, data: { ...n.data, fields } };
+          // Shrink the box back to fit the remaining fields.
+          const h = entityFitHeight(fields.length);
+          return { ...n, height: h, style: { ...n.style, height: h }, data: { ...n.data, fields } };
         }),
       });
     }),
@@ -640,21 +815,40 @@ export const useFlowStore = create<FlowState>((set, get) => {
     assignToSubgraph: withHistory((nodeIds, subgraphId) => {
       const { nodes, edges } = get();
       const newParent = subgraphId ? nodes.find((p) => p.id === subgraphId) : null;
+      // Absolute position of a node, following the WHOLE parent chain. Adding
+      // back just one level is wrong whenever anything nests (a note on a node
+      // that lives in a group), and the leftover offset is what used to hurl a
+      // re-parented note clear across the canvas.
+      const absOf = (node: (typeof nodes)[number]) => {
+        let x = node.position.x;
+        let y = node.position.y;
+        const seen = new Set<string>([node.id]);
+        let p = node.parentId ? nodes.find((m) => m.id === node.parentId) : undefined;
+        while (p && !seen.has(p.id)) {
+          seen.add(p.id);
+          x += p.position.x;
+          y += p.position.y;
+          p = p.parentId ? nodes.find((m) => m.id === p!.parentId) : undefined;
+        }
+        return { x, y };
+      };
+      const newParentAbs = newParent ? absOf(newParent) : null;
       const mapped = nodes.map((n) => {
           if (!nodeIds.includes(n.id)) return n;
-          // Resolve the node's CURRENT absolute position first. A node already
-          // inside a group stores a parent-relative position, so we must add
-          // the old parent's position back before re-parenting. This makes
-          // free→group, group→free, and group→group all land correctly.
-          const oldParent = n.parentId ? nodes.find((p) => p.id === n.parentId) : null;
-          const abs = oldParent
-            ? { x: oldParent.position.x + n.position.x, y: oldParent.position.y + n.position.y }
-            : { x: n.position.x, y: n.position.y };
+          // Resolve the node's CURRENT absolute position first, so free→group,
+          // group→free, and group→group all land where the user dropped it.
+          const abs = absOf(n);
           if (!newParent) {
-            return { ...n, parentId: undefined, extent: undefined, position: abs };
+            // Came loose. Stay exactly where it was dropped — a note that missed
+            // its target must never go hunting off-screen — but a note that was
+            // attached gets a few px of drift so the detach is visible.
+            const drift = n.data?.isNote && n.parentId ? 8 : 0;
+            return { ...n, parentId: undefined, extent: undefined, position: { x: abs.x + drift, y: abs.y + drift } };
           }
-          const relPos = { x: abs.x - newParent.position.x, y: abs.y - newParent.position.y };
-          return { ...n, parentId: newParent.id, position: relPos };
+          const relPos = { x: abs.x - newParentAbs!.x, y: abs.y - newParentAbs!.y };
+          // Clear any extent lock (imported nodes carried extent:'parent') so the
+          // node stays freely draggable in/out for membership reconciliation.
+          return { ...n, parentId: newParent.id, extent: undefined, position: relPos };
       });
       // Attaching to a regular node makes the assigned nodes addenda (e.g. a
       // sticky note) — they can't have edges, so drop any connected to them.
@@ -663,8 +857,18 @@ export const useFlowStore = create<FlowState>((set, get) => {
         newParent && !newParent.data.isSubgraph
           ? edges.filter((e) => !attachIds.has(e.source) && !attachIds.has(e.target))
           : edges;
-      set({ nodes: orderByParent(mapped), edges: newEdges });
+      // Grow the target subgraph so the newly-added node sits inside it (no spill).
+      let result = orderByParent(mapped);
+      if (newParent && newParent.data.isSubgraph) result = growGroupToFit(result, newParent.id);
+      set({ nodes: result, edges: newEdges });
     }),
+
+    fitGroups: () => {
+      const orig = get().nodes;
+      let ns = orig;
+      for (const g of orig.filter((n) => n.data?.isSubgraph)) ns = growGroupToFit(ns, g.id);
+      if (ns !== orig) set({ nodes: ns });
+    },
 
     setDirection: (direction) => set({ direction }),
     setTheme: (theme) => set({ theme }),

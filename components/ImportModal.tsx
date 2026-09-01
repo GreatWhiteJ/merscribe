@@ -30,7 +30,16 @@ export function ImportModal({ onClose }: ImportModalProps) {
       return
     }
     debounceRef.current = setTimeout(() => {
-      setResult(parseDocument(value))
+      try {
+        setResult(parseDocument(value))
+      } catch (err) {
+        // Without this the throw escapes the timeout, `result` stays null, and
+        // the modal sits on "Parsing…" forever with Import greyed out.
+        setResult({
+          nodes: [], edges: [], direction: 'TD', theme: 'default', look: 'classic', curveStyle: 'basis',
+          error: `Unexpected error: ${err instanceof Error ? err.message : String(err)}`,
+        })
+      }
     }, 300)
     return () => { if (debounceRef.current) clearTimeout(debounceRef.current) }
   }, [value])

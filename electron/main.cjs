@@ -29,6 +29,35 @@ function writeSession(obj) {
   try { fs.writeFileSync(sessionFile(), JSON.stringify(obj), 'utf8') } catch { /* ignore */ }
 }
 
+// ── Recent files ─────────────────────────────────────────────────────────────
+// A most-recently-used list of linked .md paths, kept in the session so Open can
+// offer quick access without re-navigating a dialog every time.
+const RECENTS_MAX = 10
+function pushRecent(p) {
+  if (!p) return
+  const s = readSession() || {}
+  const recents = [p, ...(s.recents || []).filter((x) => x !== p)].slice(0, RECENTS_MAX)
+  writeSession({ ...s, recents })
+}
+// Point auto-save at `p`: update savePath, persist it (preserving recents/state),
+// optionally record it as recent, and follow it with the file watcher.
+function linkPath(p, { recent = true } = {}) {
+  savePath = p
+  const s = readSession() || {}
+  const recents = recent
+    ? [p, ...(s.recents || []).filter((x) => x !== p)].slice(0, RECENTS_MAX)
+    : s.recents || []
+  writeSession({ ...s, savePath, recents })
+  watchSavePath()
+}
+// The next free "untitled.md" (untitled-2.md, …) in `dir`, for New.
+function uniqueUntitled(dir) {
+  let p = path.join(dir, 'untitled.md')
+  let i = 2
+  while (fs.existsSync(p)) p = path.join(dir, `untitled-${i++}.md`)
+  return p
+}
+
 // ── Live file watching ───────────────────────────────────────────────────────
 // Watch the linked .md so external edits (an agent, or another editor) flow into
 // the canvas in real time. Our own auto-saves are ignored via lastWrittenMd.
@@ -148,12 +177,36 @@ ipcMain.handle('open-file', async () => {
     filters: [{ name: 'Markdown', extensions: ['md'] }],
   })
   if (r.canceled || !r.filePaths || !r.filePaths[0]) return null
-  savePath = r.filePaths[0]
-  writeSession({ ...(readSession() || {}), savePath })
-  watchSavePath() // follow the newly-opened file
+  linkPath(r.filePaths[0]) // set savePath, record recent, follow the file
   let content = null
   try { content = fs.readFileSync(savePath, 'utf8') } catch { /* unreadable */ }
   return { path: savePath, content }
+})
+
+// Open a specific path (from the recent-files menu) — no dialog. Returns null if
+// the file is gone/unreadable so the caller can prune it from the list.
+ipcMain.handle('open-path', async (_e, p) => {
+  if (!p || typeof p !== 'string') return null
+  let content = null
+  try { content = fs.readFileSync(p, 'utf8') } catch { return null }
+  linkPath(p)
+  return { path: savePath, content }
+})
+
+// Start a fresh document: link a new untitled .md next to the current file. It
+// isn't written until the canvas has content (auto-save's empty-file guard), so
+// New never litters empty files, and it enters Recents on first save.
+ipcMain.handle('new-file', async () => {
+  const dir = savePath ? path.dirname(savePath) : app.getPath('downloads')
+  linkPath(uniqueUntitled(dir), { recent: false })
+  return savePath
+})
+
+// The recent-files list, pruned to paths that still exist and excluding the
+// currently-open file (it's already shown in the save pill).
+ipcMain.handle('get-recents', () => {
+  const s = readSession() || {}
+  return (s.recents || []).filter((p) => p !== savePath && fs.existsSync(p))
 })
 
 // Save As: choose a new name/location for the current canvas. Classic Save
@@ -166,9 +219,7 @@ ipcMain.handle('save-as', async () => {
     properties: ['createDirectory', 'showOverwriteConfirmation'],
   })
   if (r.canceled || !r.filePath) return null
-  savePath = r.filePath
-  writeSession({ ...(readSession() || {}), savePath })
-  watchSavePath() // follow the new target
+  linkPath(r.filePath) // set savePath, record recent, follow the new target
   return savePath
 })
 
@@ -177,7 +228,10 @@ ipcMain.handle('save', async (_e, md, state) => {
   if (!savePath) return false
   lastWrittenMd = md // mark as ours so the watcher ignores this write
   await fs.promises.writeFile(savePath, md, 'utf8')
-  writeSession({ savePath, state })
+  // Preserve recents (and add this path now that the file exists on disk).
+  const s = readSession() || {}
+  const recents = [savePath, ...(s.recents || []).filter((x) => x !== savePath)].slice(0, RECENTS_MAX)
+  writeSession({ ...s, savePath, state, recents })
   return true
 })
 

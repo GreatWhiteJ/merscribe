@@ -41,19 +41,34 @@ export function applyDagreLayout(
     }
   }
 
-  // Set parent relationships for compound layout
+  // Set parent relationships for compound layout. Only against a parent that is
+  // actually in this graph — graphlib would otherwise conjure a value-less node
+  // for it, which dagre then trips over while ranking.
   for (const node of nodes) {
-    if (node.parentId) {
+    if (node.parentId && g.hasNode(node.parentId)) {
       g.setParent(node.id, node.parentId)
     }
   }
 
-  // Add ALL edges — dagre handles cross-boundary edges in compound mode
+  // Cross-boundary edges are fine, but an edge incident to a *cluster* (a
+  // subgraph — `explore --> places`) is not: dagre can't rank one, and an edge
+  // naming a node that isn't here makes graphlib invent an empty one, which
+  // crashes the same rank pass. Skip both for layout purposes only — React Flow
+  // still draws every edge; it just doesn't get a say in where things land.
+  const clusters = new Set(nodes.filter((n) => n.data?.isSubgraph).map((n) => n.id))
   for (const edge of edges) {
+    if (!g.hasNode(edge.source) || !g.hasNode(edge.target)) continue
+    if (clusters.has(edge.source) || clusters.has(edge.target)) continue
     g.setEdge(edge.source, edge.target)
   }
 
-  dagre.layout(g)
+  try {
+    dagre.layout(g)
+  } catch {
+    // A layout we can't compute must never cost the user their document — hand
+    // the nodes back unpositioned rather than throwing out of the parse.
+    return nodes
+  }
 
   return nodes.map((node) => {
     const layout = g.node(node.id)
