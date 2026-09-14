@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.11] - 2026-09-14
+
 ### Added
 - **New document** — a **New** button (Ctrl+N) starts a blank diagram, linking a fresh `untitled.md` next to the current file (created on your first change, so it never litters empty files).
 - **Recent files** — an Open dropdown lists recently-opened `.md` files; pick one to reopen it without a file dialog.
@@ -79,6 +81,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Phantom ER entities** — `style` / `subgraph` lines inside an `erDiagram` block were mis-parsed into junk `style`/`fill` entities; now handled correctly.
 
 ## [Unreleased]
+
+## [0.1.11] - 2026-09-14
 
 ### Added
 - **Desktop app (Electron)** — local window with silent auto-save to a `.md` file (default `Downloads/diagram.md`), last-session restore on launch, and an Open-dialog file picker (no overwrite prompt).
