@@ -158,6 +158,111 @@ function placeAttachedNotes(
   return [...positioned, ...placed] // hosts already precede their notes
 }
 
+// ── Keep lines out of groups they don't belong to ─────────────────────────────
+// Edges are drawn as plain curves between handles. Dagre places groups as
+// clusters but knows nothing about those curves, so a long edge (a "no" that
+// skips a whole module) can run straight across a group it has nothing to do
+// with. After layout, treat every top-level group as a solid object: if an
+// edge's curve would pass through a group that holds neither of its ends, slide
+// the group (contents and all) sideways until the curve clears it, pushing any
+// top-level object it would then overlap further along. Positions only — the
+// lines themselves are unchanged.
+type Rect = { x1: number; y1: number; x2: number; y2: number }
+const CLEAR = 18
+
+// React Flow's default bezier (getBezierPath, curvature 0.25), sampled.
+function bezierSamples(sx: number, sy: number, sSide: string, tx: number, ty: number, tSide: string, n = 32) {
+  const off = (d: number) => (d >= 0 ? 0.5 * d : 0.25 * 25 * Math.sqrt(-d))
+  const ctl = (side: string, x1: number, y1: number, x2: number, y2: number): [number, number] =>
+    side === 'left' ? [x1 - off(x1 - x2), y1] : side === 'right' ? [x1 + off(x2 - x1), y1]
+      : side === 'top' ? [x1, y1 - off(y1 - y2)] : [x1, y1 + off(y2 - y1)]
+  const [c1x, c1y] = ctl(sSide, sx, sy, tx, ty)
+  const [c2x, c2y] = ctl(tSide, tx, ty, sx, sy)
+  const out: { x: number; y: number }[] = []
+  for (let i = 1; i < n; i++) {
+    const t = i / n, u = 1 - t
+    out.push({
+      x: u * u * u * sx + 3 * u * u * t * c1x + 3 * u * t * t * c2x + t * t * t * tx,
+      y: u * u * u * sy + 3 * u * u * t * c1y + 3 * u * t * t * c2y + t * t * t * ty,
+    })
+  }
+  return out
+}
+
+function clearGroupCrossings(nodes: Node<FlowNodeData>[], edges: Edge<FlowEdgeData>[]): Node<FlowNodeData>[] {
+  let ns = nodes.map((n) => ({ ...n, position: { ...n.position } }))
+  const byId = () => new Map(ns.map((n) => [n.id, n]))
+  const sizeOf = (n: Node<FlowNodeData>) => ({ w: n.width ?? (Number(n.style?.width) || 0), h: n.height ?? (Number(n.style?.height) || 0) })
+  const absRect = (id: string, m: Map<string, Node<FlowNodeData>>): Rect | null => {
+    let n = m.get(id)
+    if (!n) return null
+    const { w, h } = sizeOf(n)
+    let x = n.position.x, y = n.position.y
+    const seen = new Set([n.id])
+    while (n?.parentId && !seen.has(n.parentId)) {
+      seen.add(n.parentId)
+      n = m.get(n.parentId)
+      if (n) { x += n.position.x; y += n.position.y }
+    }
+    return { x1: x, y1: y, x2: x + w, y2: y + h }
+  }
+  const within = (id: string, groupId: string, m: Map<string, Node<FlowNodeData>>) => {
+    let n = m.get(id)
+    const seen = new Set<string>()
+    while (n && !seen.has(n.id)) { if (n.id === groupId) return true; seen.add(n.id); n = n.parentId ? m.get(n.parentId) : undefined }
+    return false
+  }
+  const side = (h: string | null | undefined, fallback: string) => (h?.split('-')[0] ?? fallback)
+  const anchor = (r: Rect, s: string) =>
+    s === 'top' ? { x: (r.x1 + r.x2) / 2, y: r.y1 } : s === 'bottom' ? { x: (r.x1 + r.x2) / 2, y: r.y2 }
+      : s === 'left' ? { x: r.x1, y: (r.y1 + r.y2) / 2 } : { x: r.x2, y: (r.y1 + r.y2) / 2 }
+
+  for (let iter = 0; iter < 40; iter++) {
+    const m = byId()
+    const groups = ns.filter((n) => n.data?.isSubgraph && !n.parentId)
+    let fix: { g: Node<FlowNodeData>; dx: number } | null = null
+    for (const e of edges) {
+      const sr = absRect(e.source, m), tr = absRect(e.target, m)
+      if (!sr || !tr || m.get(e.source)?.data?.isEntity) continue
+      const sS = side(e.sourceHandle, 'bottom'), tS = side(e.targetHandle, 'top')
+      const a = anchor(sr, sS), b = anchor(tr, tS)
+      const pts = bezierSamples(a.x, a.y, sS, b.x, b.y, tS)
+      for (const g of groups) {
+        if (within(e.source, g.id, m) || within(e.target, g.id, m)) continue
+        const r = absRect(g.id, m)!
+        const hit = pts.filter((p) => p.x > r.x1 - CLEAR && p.x < r.x2 + CLEAR && p.y > r.y1 - CLEAR && p.y < r.y2 + CLEAR)
+        if (!hit.length) continue
+        const minX = Math.min(...hit.map((p) => p.x)), maxX = Math.max(...hit.map((p) => p.x))
+        const right = maxX + CLEAR - r.x1, left = minX - CLEAR - r.x2
+        fix = { g, dx: Math.abs(right) <= Math.abs(left) ? right : left }
+        break
+      }
+      if (fix) break
+    }
+    if (!fix) break
+    // Slide the group, then push top-level objects it now overlaps, in order.
+    const moved = new Set<string>([fix.g.id])
+    fix.g.position.x += fix.dx
+    const dir = Math.sign(fix.dx)
+    const queue = [fix.g.id]
+    while (queue.length) {
+      const id = queue.shift()!
+      const m2 = byId()
+      const r = absRect(id, m2)!
+      for (const o of ns) {
+        if (o.parentId || moved.has(o.id) || o.id === id) continue
+        const q = absRect(o.id, m2)
+        if (!q || q.y2 + CLEAR <= r.y1 || q.y1 >= r.y2 + CLEAR) continue
+        const overlap = dir > 0 ? r.x2 + CLEAR - q.x1 : q.x2 + CLEAR - r.x1
+        const ahead = dir > 0 ? q.x1 >= r.x1 : q.x2 <= r.x2
+        if (overlap > 0 && ahead) { o.position.x += dir * overlap; moved.add(o.id); queue.push(o.id) }
+      }
+    }
+    ns = [...ns]
+  }
+  return ns
+}
+
 // Lay out a graph: size-aware Dagre for structural nodes + corner-placed notes.
 export async function autoArrange(
   nodes: Node<FlowNodeData>[],
@@ -205,15 +310,40 @@ export async function autoArrange(
       if (n.parentId && ids.has(n.parentId)) g.setParent(n.id, n.parentId)
       else if (cluster?.has(n.id)) g.setParent(n.id, cluster.get(n.id)!)
     }
-    // Same rule as lib/layout.ts: an edge touching a subgraph is undrawable by
-    // dagre (it can't rank a cluster) and used to take the whole layout down
-    // with it — the try/catch below would then leave every node unpositioned.
+    // Dagre can't rank a cluster, so an edge touching a subgraph (`a --> grp`,
+    // `grp --> b`) can't go in as-is (it used to crash the layout). Dropping it
+    // left group-to-group flows unconstrained: the groups floated side by side.
+    // Do what Mermaid does instead: stand in the group's entry nodes for an edge
+    // into it and its exit nodes for an edge out of it, descending into nested
+    // groups, so the chain ranks top to bottom like the Mermaid preview.
     const clusters = new Set(group.filter((n) => n.data?.isSubgraph).map((n) => n.id))
+    const kidsOf = new Map<string, string[]>()
+    for (const n of group) {
+      if (!n.parentId || !clusters.has(n.parentId) || n.data?.isNote) continue
+      const list = kidsOf.get(n.parentId) ?? []
+      list.push(n.id)
+      kidsOf.set(n.parentId, list)
+    }
+    const ends = (id: string, side: 'in' | 'out', seen = new Set<string>()): string[] => {
+      if (!clusters.has(id)) return g.hasNode(id) ? [id] : []
+      if (seen.has(id)) return []
+      seen.add(id)
+      const kids = kidsOf.get(id) ?? []
+      const sib = new Set(kids)
+      // entry = no incoming edge from a sibling; exit = no outgoing edge to one
+      const pick = kids.filter((k) => !edges.some((e) =>
+        side === 'in' ? e.target === k && sib.has(e.source) : e.source === k && sib.has(e.target)))
+      return (pick.length ? pick : kids.slice(0, 1)).flatMap((k) => ends(k, side, seen))
+    }
     for (const e of edges) {
       if (!ids.has(e.source) || !ids.has(e.target)) continue
       if (!g.hasNode(e.source) || !g.hasNode(e.target)) continue
-      if (clusters.has(e.source) || clusters.has(e.target)) continue
-      g.setEdge(e.source, e.target)
+      if (!clusters.has(e.source) && !clusters.has(e.target)) {
+        g.setEdge(e.source, e.target)
+        continue
+      }
+      for (const s of ends(e.source, 'out'))
+        for (const t of ends(e.target, 'in')) if (s !== t) g.setEdge(s, t)
     }
 
     try { dagre.layout(g) } catch { return { positioned: group, height: 0 } }
@@ -277,5 +407,7 @@ export async function autoArrange(
     ? erRes.positioned.map((n) => ({ ...n, position: { x: n.position.x, y: n.position.y + offset } }))
     : erRes.positioned
 
-  return placeAttachedNotes([...flowRes.positioned, ...erShifted], attached, subgraphIds)
+  const flowClear = clearGroupCrossings(flowRes.positioned, edges)
+
+  return placeAttachedNotes([...flowClear, ...erShifted], attached, subgraphIds)
 }

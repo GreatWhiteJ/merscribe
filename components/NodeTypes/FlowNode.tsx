@@ -192,36 +192,31 @@ function NodeHandles() {
   const leftStyle = { ...base, left: 2 }
   const rightStyle = { ...base, right: 2 }
 
+  const cls = '!bg-blue-300 hover:!bg-blue-500 !w-3 !h-3'
+
+  // Every side carries a target dot AND a source dot stacked on the same spot.
+  // In loose mode React Flow lets an edge's *target* end use any dot, but looks
+  // its *source* end up among source dots only — so a drag that started on a
+  // target-only dot (old top/left) was reversed into an edge whose source was a
+  // target dot: created, never drawn ("the curve snaps away"), error 008.
+  // With a source dot on top of every side, a drag always starts from a source
+  // (the edge runs the way you dragged) and lands on one, so both ends resolve.
+  //
+  // DOM order matters: handle-less edges (all parsed Mermaid edges) take the
+  // FIRST source and FIRST target dot, so bottom-source and top-target lead to
+  // keep the default "out the bottom, in the top". Source dots render after the
+  // target dots so they are the ones under the pointer. Ids top-target,
+  // left-target, bottom-source, right-source are unchanged for saved edges.
   return (
     <>
-      <Handle
-        id="top-target"
-        type="target"
-        position={Position.Top}
-        className="!bg-blue-300 hover:!bg-blue-500 !w-3 !h-3"
-        style={topStyle}
-      />
-      <Handle
-        id="left-target"
-        type="target"
-        position={Position.Left}
-        className="!bg-blue-300 hover:!bg-blue-500 !w-3 !h-3"
-        style={leftStyle}
-      />
-      <Handle
-        id="bottom-source"
-        type="source"
-        position={Position.Bottom}
-        className="!bg-blue-300 hover:!bg-blue-500 !w-3 !h-3"
-        style={bottomStyle}
-      />
-      <Handle
-        id="right-source"
-        type="source"
-        position={Position.Right}
-        className="!bg-blue-300 hover:!bg-blue-500 !w-3 !h-3"
-        style={rightStyle}
-      />
+      <Handle id="top-target" type="target" position={Position.Top} className={cls} style={topStyle} />
+      <Handle id="left-target" type="target" position={Position.Left} className={cls} style={leftStyle} />
+      <Handle id="bottom-target" type="target" position={Position.Bottom} className={cls} style={bottomStyle} />
+      <Handle id="right-target" type="target" position={Position.Right} className={cls} style={rightStyle} />
+      <Handle id="bottom-source" type="source" position={Position.Bottom} className={cls} style={bottomStyle} />
+      <Handle id="right-source" type="source" position={Position.Right} className={cls} style={rightStyle} />
+      <Handle id="top-source" type="source" position={Position.Top} className={cls} style={topStyle} />
+      <Handle id="left-source" type="source" position={Position.Left} className={cls} style={leftStyle} />
     </>
   )
 }

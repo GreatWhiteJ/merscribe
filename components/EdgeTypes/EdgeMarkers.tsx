@@ -12,8 +12,11 @@ export function EdgeMarkerDefs() {
     <svg width="0" height="0" style={{ position: 'absolute', overflow: 'hidden' }} aria-hidden>
       <defs>
         {/* ── Flowchart end markers ── */}
+        {/* refX sits at the triangle's base, not its tip: FlowEdge stops the
+            path ARROW_LEN short of the node, so the line ends where the
+            triangle begins and the tip just touches the node. */}
         <marker id="fm-arrow" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="13"
-          viewBox="0 0 12 12" refX="10" refY="6" orient="auto-start-reverse">
+          viewBox="0 0 12 12" refX="3" refY="6" orient="auto-start-reverse">
           <path d="M2,2 L11,6 L2,10 Z" fill={cs} stroke={cs} strokeWidth="1" strokeLinejoin="round" />
         </marker>
         <marker id="fm-circle" markerUnits="userSpaceOnUse" markerWidth="13" markerHeight="13"
@@ -49,6 +52,10 @@ export function EdgeMarkerDefs() {
     </svg>
   )
 }
+
+// Base-to-tip length of fm-arrow in flow units: (tip 11.5 incl. stroke - refX 3)
+// x (markerWidth 13 / viewBox 12). FlowEdge pulls arrow ends back by this much.
+export const ARROW_LEN = 9
 
 export const flowMarkerUrl = (m: FlowMarker): string | undefined =>
   m === 'none' ? undefined : `url(#fm-${m})`

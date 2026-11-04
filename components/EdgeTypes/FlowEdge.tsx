@@ -6,6 +6,7 @@ import {
   getBezierPath,
   getSmoothStepPath,
   getStraightPath,
+  Position,
   useInternalNode,
   type EdgeProps,
 } from '@xyflow/react'
@@ -13,7 +14,20 @@ import { useCallback, useLayoutEffect, useRef, useState } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useFlowStore, type FlowEdgeData, type FlowMarker, type ErEnd } from '@/lib/store'
 import { getErEdgeParams } from '@/lib/floatingEdge'
-import { flowMarkerUrl, erMarkerUrl } from './EdgeMarkers'
+import { flowMarkerUrl, erMarkerUrl, ARROW_LEN } from './EdgeMarkers'
+
+// Move an edge endpoint `d` units out from its node, away from the side it
+// attaches to (a Top handle moves up, a Right handle moves right, ...).
+function pullBack(x: number, y: number, side: Position, d: number): [number, number] {
+  if (!d) return [x, y]
+  switch (side) {
+    case Position.Top: return [x, y - d]
+    case Position.Bottom: return [x, y + d]
+    case Position.Left: return [x - d, y]
+    case Position.Right: return [x + d, y]
+    default: return [x, y]
+  }
+}
 
 export function FlowEdge({
   id,
@@ -49,12 +63,15 @@ export function FlowEdge({
   const erp = isEr
     ? getErEdgeParams(sourceNode, targetNode, edgeData?.sourceFieldIndex, edgeData?.targetFieldIndex)
     : null
-  const sx = erp?.sx ?? sourceX
-  const sy = erp?.sy ?? sourceY
-  const tx = erp?.tx ?? targetX
-  const ty = erp?.ty ?? targetY
   const sPos = erp?.sourcePos ?? sourcePosition
   const tPos = erp?.targetPos ?? targetPosition
+  // An arrowhead is drawn from its base (see fm-arrow), so a flow edge ending in
+  // an arrow stops ARROW_LEN short of the node: the line flows into the base of
+  // the triangle instead of running under it to the node edge.
+  const endArrow = !isEr && ((edgeData?.endMarker as FlowMarker) ?? 'arrow') === 'arrow'
+  const startArrow = !isEr && (edgeData?.startMarker as FlowMarker) === 'arrow'
+  const [sx, sy] = pullBack(erp?.sx ?? sourceX, erp?.sy ?? sourceY, sPos, startArrow ? ARROW_LEN : 0)
+  const [tx, ty] = pullBack(erp?.tx ?? targetX, erp?.ty ?? targetY, tPos, endArrow ? ARROW_LEN : 0)
 
   // ER relationships always route as right-angles (that's the ER convention and
   // it reads cleanly with field-level side attachment); flowchart edges follow
@@ -132,7 +149,10 @@ export function FlowEdge({
     <>
       {gap && (
         <defs>
-          <mask id={maskId} maskUnits="userSpaceOnUse">
+          {/* The mask region needs explicit bounds: with userSpaceOnUse its
+              default -10%/120% is relative to the edge SVG's viewport, which
+              React Flow sizes ~0, so an unbounded mask hid the whole line. */}
+          <mask id={maskId} maskUnits="userSpaceOnUse" x={-1e6} y={-1e6} width={2e6} height={2e6}>
             {/* white shows the stroke, black punches it out */}
             <rect x={-1e6} y={-1e6} width={2e6} height={2e6} fill="white" />
             <rect

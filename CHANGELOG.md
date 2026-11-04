@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Labeled edges were invisible** — any edge with a label (e.g. `a -->|"yes"| b`) drew its label but not its line. The label-gap mask had no explicit region, so with `userSpaceOnUse` it defaulted to a percentage of React Flow's near-zero-size edge SVG and clipped the whole stroke. The mask now spans the canvas.
+- **Arrowheads sit on the line's end** — the line used to run under the arrowhead to the node edge, so on curved edges the stroke cut through the triangle at an angle. The arrow is now anchored at its base and the path stops one arrow-length short of the node: the line flows into the triangle's base and the tip touches the node.
+- **Connections from a top or left dot vanished** — dragging out of a node's top or left dot and dropping on another top or left dot showed the line while dragging, then nothing. React Flow reversed the connection, gave the edge a target dot as its source, and never drew it (the invisible edge still reached the `.md` as a reversed `b --> a`). Every side now has a source dot stacked over its target dot, so any dot-to-dot drag connects and the arrow runs the way you dragged.
+- **Arrows to and from groups now shape the layout** — Auto-arrange dropped every edge that touched a subgraph (Dagre can't rank a cluster), so a group-to-group flow (`a --> grp`, `grp --> b`) laid the groups out side by side with long crossing arrows. Like Mermaid, such an edge now stands in the group's entry nodes (edges in) or exit nodes (edges out), so the canvas stacks the way the Mermaid preview does.
+- **Auto-arrange keeps groups out of unrelated lines** — Dagre places groups as clusters but knows nothing about the curves the canvas draws, so a long edge (e.g. a "no" that skips a whole group) could run straight across a group holding neither of its ends. Auto-arrange now treats each top-level group as a solid object: when an edge's curve would cross a group it doesn't belong to, the group (with its contents) slides sideways until the curve clears it, and anything it would then overlap is pushed along. Only positions change; edges are still plain curves.
+
 ## [0.1.11] - 2026-09-14
 
 ### Added
