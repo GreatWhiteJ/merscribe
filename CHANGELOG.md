@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-11-03
+
 ### Fixed
 - **Labeled edges were invisible** — any edge with a label (e.g. `a -->|"yes"| b`) drew its label but not its line. The label-gap mask had no explicit region, so with `userSpaceOnUse` it defaulted to a percentage of React Flow's near-zero-size edge SVG and clipped the whole stroke. The mask now spans the canvas.
 - **Arrowheads sit on the line's end** — the line used to run under the arrowhead to the node edge, so on curved edges the stroke cut through the triangle at an angle. The arrow is now anchored at its base and the path stops one arrow-length short of the node: the line flows into the triangle's base and the tip touches the node.
@@ -87,9 +89,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Toolbar overflow** — the Open / Save As controls could be pushed off-screen when the toolbar got crowded; the switcher moved to a floating control and the toolbar now caps width instead of clipping.
 - **Phantom ER entities** — `style` / `subgraph` lines inside an `erDiagram` block were mis-parsed into junk `style`/`fill` entities; now handled correctly.
 
-## [Unreleased]
+## [0.1.7] - 2026-06-23
 
-## [0.1.11] - 2026-09-14
+The desktop launch, shipped across the 0.1.1 to 0.1.7 releases.
 
 ### Added
 - **Desktop app (Electron)** — local window with silent auto-save to a `.md` file (default `Downloads/diagram.md`), last-session restore on launch, and an Open-dialog file picker (no overwrite prompt).
